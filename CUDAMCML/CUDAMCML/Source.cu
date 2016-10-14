@@ -39,15 +39,14 @@ __shared__ PhotonStruct dsh_sPhoton[NUM_THREADS_PER_BLOCK];
 
 
 	//First element processed by the block
-	int begin = NUM_THREADS_PER_BLOCK*bx;
+	int begin = blockDim.x*bx;
 
-	if (begin+tx>= num_photons_dc[0]){
-		return;
-	}
 	if (DeviceMem.thread_active[begin + tx] != 0){
 		return;
 	}
-
+	if (*DeviceMem.num_terminated_photons>100000){
+		return;
+	}
 	unsigned long long int x = DeviceMem.x[begin + tx];	//coherent
 	unsigned int a = DeviceMem.a[begin + tx];			//coherent
 	dsh_sPhoton[tx] = DeviceMem.p[begin + tx];
@@ -55,7 +54,7 @@ __shared__ PhotonStruct dsh_sPhoton[NUM_THREADS_PER_BLOCK];
 
 	unsigned int index, index_old;
 	index_old = 0;
-	long long w,w_temp;
+	unsigned long long w,w_temp;
 	w = 0;
 
 	int new_layer;
@@ -98,7 +97,6 @@ __shared__ PhotonStruct dsh_sPhoton[NUM_THREADS_PER_BLOCK];
 		if (dsh_sPhoton[tx].z < layers_dc[dsh_sPhoton[tx].layer].z_min){
 			dsh_sPhoton[tx].z = layers_dc[dsh_sPhoton[tx].layer].z_min;//needed?
 		}
-		//　レイヤー変化していた場合
 
 		if (new_layer != dsh_sPhoton[tx].layer)
 		{
@@ -113,19 +111,15 @@ __shared__ PhotonStruct dsh_sPhoton[NUM_THREADS_PER_BLOCK];
 				{	// Diffuse reflectance　拡散反射
 					// __float2int_rz ・・・float  => int　への型変換(小数点切り捨て？)
 					index = __float2int_rz(acosf(-dsh_sPhoton[tx].dz)*2.0f*RPI*det_dc[0].na)*det_dc[0].nr + min(__float2int_rz(__fdividef(sqrtf(dsh_sPhoton[tx].x*dsh_sPhoton[tx].x + dsh_sPhoton[tx].y*dsh_sPhoton[tx].y), det_dc[0].dr)), (int)det_dc[0].nr - 1);
-					// OK
-					// DeviceMem.Rd_ra[index] = dsh_sPhoton[tx].weight;
-//					AtomicAddULL(&DeviceMem.Rd_ra[index], start_weight_dc[0]);
 					AtomicAddULL(&DeviceMem.Rd_ra[index], dsh_sPhoton[tx].weight);
-
+					dsh_sPhoton[tx].weight = 0;
 					break;
 				}
 				if (new_layer > *n_layers_dc)
 				{	//Transmitted　透過
 					index = __float2int_rz(acosf(dsh_sPhoton[tx].dz)*2.0f*RPI*det_dc[0].na)*det_dc[0].nr + min(__float2int_rz(__fdividef(sqrtf(dsh_sPhoton[tx].x*dsh_sPhoton[tx].x + dsh_sPhoton[tx].y*dsh_sPhoton[tx].y), det_dc[0].dr)), (int)det_dc[0].nr - 1);
-					// No Result ?
-					// AtomicAddULL(&DeviceMem.Tt_ra[index], 100);
 					AtomicAddULL(&DeviceMem.Tt_ra[index], dsh_sPhoton[tx].weight);
+					dsh_sPhoton[tx].weight = 0;
 					break;
 				}
 			}
@@ -164,6 +158,7 @@ __shared__ PhotonStruct dsh_sPhoton[NUM_THREADS_PER_BLOCK];
 			break;				// Exit main loop
 		}
 	}//end main for loop!
+	atomicAdd(DeviceMem.num_terminated_photons, 1ul);
 	if (ignoreAdetection == 1 && w != 0)
 		AtomicAddULL(&DeviceMem.A_rz[index_old], w);
 
@@ -211,7 +206,7 @@ __global__ void LaunchPhoton_Global(PhotonStruct* pd)
 		pd[PosData].y	= 0.0f;
 		pd[PosData].z	= 0.0;
 		pd[PosData].layer	= 1;
-		pd[PosData].weight	= (unsigned int)*start_weight_dc;
+		pd[PosData].weight	= (unsigned long long)*start_weight_dc;
 
 		//DeviceMem->p[begin + tx] = p;//incoherent!?
 		
@@ -450,12 +445,6 @@ int cCUDAMCML::DoOneSimulation(SimulationStruct* simulation)
 	if (cudastat){
 		return _ERR_GPU_SIM_MEMCPY_;
 	}
-
-	cudastat = cudaGetLastError(); // Check if there was an error
-	if (cudastat){
-		return _ERR_GPU_SIM_ANOTHER_;
-	}
-
 
 	CopyDeviceToHostMem(&m_sHostMem, &m_sDeviceMem, simulation);
 	return _SUCCESS_GPU_SIM_;

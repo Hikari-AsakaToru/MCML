@@ -93,7 +93,7 @@ __shared__ PhotonStruct dsh_sPhoton[NUM_THREADS_PER_BLOCK];
 		dsh_sPhoton[tx].x += dsh_sPhoton[tx].dx*s;
 		dsh_sPhoton[tx].y += dsh_sPhoton[tx].dy*s;
 		dsh_sPhoton[tx].z += dsh_sPhoton[tx].dz*s;
-
+//		Hop(&dsh_sPhoton[tx],s);
 		if (dsh_sPhoton[tx].z > layers_dc[dsh_sPhoton[tx].layer].z_max){
 			dsh_sPhoton[tx].z = layers_dc[dsh_sPhoton[tx].layer].z_max;//needed?
 		}
@@ -242,6 +242,24 @@ __global__ void InitRng(unsigned long long * X, unsigned int *A){
 	}
 	return;
 }
+__device__ double SpinTheta(unsigned long long int* x, unsigned int *a, double g){
+	double cost;
+
+	if (g == 0.0)
+		cost = 2 * rand_MWC_co(x, a) - 1;
+	else {
+		double temp = (1 - g*g) / (1 - g + 2 * g*rand_MWC_co(x, a));
+		cost = (1 + g*g - temp*temp) / (2 * g);
+		if (cost < -1) cost = -1;
+		else if (cost > 1) cost = 1;
+	}
+	return(cost);
+}
+__device__ void Hop(PhotonStruct* p,float s){
+	p->x = s*p->dx;
+	p->y = s*p->dy;
+	p->z = s*p->dz;
+}
 __device__ void Spin(PhotonStruct* p, unsigned long long int* x, unsigned int *a, float g)
 {
 	float cost, sint;	// cosine and sine of the 
@@ -251,12 +269,15 @@ __device__ void Spin(PhotonStruct* p, unsigned long long int* x, unsigned int *a
 	float temp=2.1;
 
 	float tempdir = p->dx;
-
+	// Open CUDA Code
 	//This is more efficient for g!=0 but of course less efficient for g==0
-	temp = __fdividef((1.0f - (g)*(g)), (1.0f - (g)+2.0f*(g)*rand_MWC_co(x, a)));//Should be close close????!!!!!
-	cost = __fdividef((1.0f + (g)*(g)-temp*temp), (2.0f*(g)));
-	if (g == 0.0f)
-		cost = 2.0f*rand_MWC_co(x, a) - 1.0f;//Should be close close??!!!!!
+	//	temp = __fdividef((1.0f - (g)*(g)), (1.0f - (g)+2.0f*(g)*rand_MWC_co(x, a)));//Should be close close????!!!!!
+	//	cost = __fdividef((1.0f + (g)*(g)-temp*temp), (2.0f*(g)));
+	//	if (g == 0.0f)
+	//		cost = 2.0f*rand_MWC_co(x, a) - 1.0f;//Should be close close??!!!!!
+
+	// MIYAHIRA mcml SpinTheta()
+	cost = SpinTheta(x,a,g);
 
 	sint = sqrtf(1.0f - cost*cost);
 
@@ -268,7 +289,7 @@ __device__ void Spin(PhotonStruct* p, unsigned long long int* x, unsigned int *a
 	{
 		p->dx = sint*cosp;
 		p->dy = sint*sinp;
-		p->dz = copysignf(cost, p->dz*cost);
+		p->dz = copysignf(cost, p->dz*cost);	// copysign(a,b)==  a*SIGN(b) 
 	}
 	else // regular incident.
 	{

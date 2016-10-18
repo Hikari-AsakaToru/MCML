@@ -66,6 +66,7 @@ __shared__ PhotonStruct dsh_sPhoton[NUM_THREADS_PER_BLOCK];
 
 	for (; ii<NUMSTEPS_GPU; ii++) //this is the main while loop
 	{
+		// Rand Make
 		// 桁あふれ出ないか確認
 		if (layers_dc[dsh_sPhoton[tx].layer].mutr != FLT_MAX){
 			// 乱数による距離生成
@@ -74,6 +75,7 @@ __shared__ PhotonStruct dsh_sPhoton[NUM_THREADS_PER_BLOCK];
 			// 一時的に100 cm代入
 			s = 100.0f;															//temporary, say the step in glass is 100 cm.
 		}
+		// Hop_Drop() mcml_go
 		//Check for layer transitions and in case, calculate s
 		new_layer = dsh_sPhoton[tx].layer;
 		// 現在のレイヤーよりも上に移動してるかを確認
@@ -112,14 +114,14 @@ __shared__ PhotonStruct dsh_sPhoton[NUM_THREADS_PER_BLOCK];
 				if (new_layer == 0)
 				{	// Diffuse reflectance　拡散反射
 					// __float2int_rz ・・・float  => int　への型変換(小数点切り捨て？)
-					index = __float2int_rz(acosf(-dsh_sPhoton[tx].dz)*2.0f*RPI*det_dc[0].na)*det_dc[0].nr + min(__float2int_rz(__fdividef(sqrtf(dsh_sPhoton[tx].x*dsh_sPhoton[tx].x + dsh_sPhoton[tx].y*dsh_sPhoton[tx].y), det_dc[0].dr)), (int)det_dc[0].nr - 1);
+					index = __float2int_rz(acosf(-dsh_sPhoton[tx].dz)*2.0f*RPI/det_dc[0].na)*det_dc[0].nr + min(__float2int_rz(__fdividef(sqrtf(dsh_sPhoton[tx].x*dsh_sPhoton[tx].x + dsh_sPhoton[tx].y*dsh_sPhoton[tx].y), det_dc[0].dr)), (int)det_dc[0].nr - 1);
 					AtomicAddULL(&DeviceMem.Rd_ra[index], dsh_sPhoton[tx].weight);
 					dsh_sPhoton[tx].weight = 0;
 					break;
 				}
 				if (new_layer > *n_layers_dc)
 				{	//Transmitted　透過
-					index = __float2int_rz(acosf(dsh_sPhoton[tx].dz)*2.0f*RPI*det_dc[0].na)*det_dc[0].nr + min(__float2int_rz(__fdividef(sqrtf(dsh_sPhoton[tx].x*dsh_sPhoton[tx].x + dsh_sPhoton[tx].y*dsh_sPhoton[tx].y), det_dc[0].dr)), (int)det_dc[0].nr - 1);
+					index = __float2int_rz(acosf(dsh_sPhoton[tx].dz)*2.0f*RPI/det_dc[0].na)*det_dc[0].nr + min(__float2int_rz(__fdividef(sqrtf(dsh_sPhoton[tx].x*dsh_sPhoton[tx].x + dsh_sPhoton[tx].y*dsh_sPhoton[tx].y), det_dc[0].dr)), (int)det_dc[0].nr - 1);
 					AtomicAddULL(&DeviceMem.Tt_ra[index], dsh_sPhoton[tx].weight);
 					dsh_sPhoton[tx].weight = 0;
 					break;

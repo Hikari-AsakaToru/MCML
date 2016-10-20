@@ -175,7 +175,7 @@ int cMCML::WriteSimRslts(MemStruct* HostMem, SimulationStruct* sim)
 	TransCstr.Format(_T("%d"), sim->RecordDoSim.procAvergTime);
 	cOutputFile.WriteString(TransCstr + _T(" ,\t\t\t# Process Average Time[ms] (DoOneSim())	\n"));
 	// Num of Photon
-	TransCstr.Format(_T("%d"), m_un64NumPhoton);
+	TransCstr.Format(_T("%d"), sim->number_of_photons);
 	cOutputFile.WriteString(TransCstr + _T(" ,\t\t\t# No. of photons\n"));
 	// dr [cm]
 	TransCstr.Format(_T("%f"), sim->det.dr);
@@ -217,9 +217,61 @@ int cMCML::WriteSimRslts(MemStruct* HostMem, SimulationStruct* sim)
 		TransCstr.Format(_T("%3.2f"), sim->layers[nLoop].z_max - sim->layers[nLoop].z_min);
 		cOutputFile.WriteString(TransCstr + _T(",\n"));
 	}
-	//// Open the input and output files
-	//pFile_inp = fopen(sim->inp_filename, "r");
-	//if (pFile_inp == NULL){ perror("Error opening input file"); return 0; }
+	cOutputFile.WriteString(_T("\nRAT #Reflectance, absorption transmission\n"));
+	unsigned long long Rs = 0;	// Specular reflectance [-]
+	unsigned long long Rd = 0;	// Diffuse reflectance [-]
+	unsigned long long A = 0;		// Absorbed fraction [-]
+	unsigned long long T = 0;		// Transmittance [-]
+	Rs = (unsigned long long)(0xFFFFFFFFu - sim->start_weight)*(unsigned long long)sim->number_of_photons;
+	for (i = 0; i < rz_size; i++){
+		A += HostMem->A_rz[i];
+	}
+	for (i = 0; i<ra_size; i++){ 
+		T += HostMem->Tt_ra[i];
+		Rd += HostMem->Rd_ra[i];
+	}
+
+
+	TransCstr.Format(_T("%G \t\t #Specular reflectance [-]\n"), (double)Rs / scale1);
+	cOutputFile.WriteString(TransCstr);
+	TransCstr.Format(_T("%G \t\t #Diffuse reflectance [-]\n"), (double)Rd / scale1);
+	cOutputFile.WriteString(TransCstr);
+	TransCstr.Format(_T("%G \t\t #Absorbed fraction  [-]\n"), (double)A / scale1);
+	cOutputFile.WriteString(TransCstr);
+	TransCstr.Format(_T("%G \t\t #Transmittance [-]\n"), (double)T / scale1);
+	cOutputFile.WriteString(TransCstr);
+
+
+	// Calculate and write A_l
+	TransCstr.Format(_T("\nA_l #Absorption as a function of layer. [-]\n"));
+	cOutputFile.WriteString(TransCstr);
+	z = 0;
+	for (l = 1; l <= sim->n_layers; l++)
+	{
+		temp = 0;
+		while (((double)z + 0.5)*dz <= sim->layers[l].z_max)
+		{
+			for (r = 0; r<nr; r++) temp += HostMem->A_rz[z*nr + r];
+			z++;
+			if (z == nz)break;
+		}
+		TransCstr.Format(_T("%G\n"), (double)temp / scale1);
+		cOutputFile.WriteString(TransCstr);
+	}
+
+	// Calculate and write A_z
+	scale2 = scale1*dz;
+	cOutputFile.WriteString(_T("\nA_z #A[0], [1],..A[nz-1]. [1/cm]\n"));
+	for (z = 0; z<nz; z++)
+	{
+		temp = 0;
+		for (r = 0; r < nr; r++){
+			temp += HostMem->A_rz[z*nr + r];
+		}
+		TransCstr.Format(_T("%E\n"), (double)temp / scale2);
+		cOutputFile.WriteString(TransCstr);
+	}
+
 	cOutputFile.WriteString(_T("\n"));
 	cOutputFile.WriteString(_T("#\t\tResult of kakuhan Rd_ra[nr][na]\n"));
 	cOutputFile.WriteString(_T("#\t\tRd_ra[ 0][0],Rd_ra[ 0][1],....,Rd_ra[ 0][nr-1]\n"));
@@ -341,7 +393,7 @@ CString cMCML::ReadSimData(CString* filename, SimulationStruct** simulations, in
 	for (int nLoop = 0; nLoop < m_nRunCount; nLoop++){
 
 		cInputFileIO.ReadFile1CStr	( &m_cstrOutputName);
-		cInputFileIO.ReadFile1UInt64( &m_un64NumPhoton);
+		cInputFileIO.ReadFile1UInt64( &(*simulations)[nLoop].number_of_photons);
 		cInputFileIO.ReadFile1Flt	( &(*simulations)[nLoop].det.dz);
 		cInputFileIO.ReadFile1Flt	( &(*simulations)[nLoop].det.dr);
 		cInputFileIO.ReadFile1UInt	( &(*simulations)[nLoop].det.nz);
@@ -365,7 +417,7 @@ CString cMCML::ReadSimData(CString* filename, SimulationStruct** simulations, in
 
 
 		//　一度に計算するフォトン数
-		(*simulations)[nLoop].number_of_photons = NUM_PHOTON_GPU;
+//		(*simulations)[nLoop].number_of_photons = NUM_PHOTON_GPU;
 
 
 
@@ -416,20 +468,20 @@ CString cMCML::ReadSimData(CString* filename, SimulationStruct** simulations, in
 		
 		// スレッド数の決定
 		// フォトンの数とメッシュ数に応じたGPUの必要メモリを算出
-		(*simulations)[nLoop].nDivedSimNum = 1;
-		m_un64Membyte = (sizeof(PhotonStruct) + sizeof(unsigned long long) + 2 * sizeof(int))*(*simulations)[nLoop].number_of_photons + sizeof(unsigned int)
-			+ sizeof(unsigned long long)*((*simulations)[nLoop].det.nr*((*simulations)[nLoop].det.nz + 2 * (*simulations)[nLoop].det.na));
-		// 全体をGPU上に乗せることができるか？　 
-		while ((m_un64Membyte > (unsigned long long)(m_sDevProp.totalGlobalMem*0.9)) && (((*simulations)[nLoop].number_of_photons / NUM_THREADS_PER_BLOCK + 1)>(m_sDevProp.multiProcessorCount-1))){
-			// 不可能な場合=>フォトン数を半減=実行スレッド数を半減
-			(*simulations)[nLoop].number_of_photons /= 2;
-			// 分割数 
-			(*simulations)[nLoop].nDivedSimNum *= 2;
-			m_un64Membyte = (sizeof(PhotonStruct) + sizeof(unsigned long long) + 3 * sizeof(int))*(*simulations)[nLoop].number_of_photons
-				+ sizeof(unsigned long long)*((*simulations)[nLoop].det.nr*((*simulations)[nLoop].det.nz + 2 * (*simulations)[nLoop].det.na));
-		}
-		(*simulations)[nLoop].nDivedSimNum *= m_un64NumPhoton / (*simulations)[nLoop].number_of_photons;
-		(*simulations)[nLoop].nDivedSimNum++;
+//		(*simulations)[nLoop].nDivedSimNum = 1;
+//		m_un64Membyte = (sizeof(PhotonStruct) + sizeof(unsigned long long) + 2 * sizeof(int))*(*simulations)[nLoop].number_of_photons + sizeof(unsigned int)
+//			+ sizeof(unsigned long long)*((*simulations)[nLoop].det.nr*((*simulations)[nLoop].det.nz + 2 * (*simulations)[nLoop].det.na));
+//		// 全体をGPU上に乗せることができるか？　 
+//		while ((m_un64Membyte > (unsigned long long)(m_sDevProp.totalGlobalMem*0.9)) && (((*simulations)[nLoop].number_of_photons / NUM_THREADS_PER_BLOCK + 1)>(m_sDevProp.multiProcessorCount-1))){
+//			// 不可能な場合=>フォトン数を半減=実行スレッド数を半減
+//			(*simulations)[nLoop].number_of_photons /= 2;
+//			// 分割数 
+//			(*simulations)[nLoop].nDivedSimNum *= 2;
+//			m_un64Membyte = (sizeof(PhotonStruct) + sizeof(unsigned long long) + 3 * sizeof(int))*(*simulations)[nLoop].number_of_photons
+//				+ sizeof(unsigned long long)*((*simulations)[nLoop].det.nr*((*simulations)[nLoop].det.nz + 2 * (*simulations)[nLoop].det.na));
+//		}
+//		(*simulations)[nLoop].nDivedSimNum *= m_un64NumPhoton / (*simulations)[nLoop].number_of_photons;
+//		(*simulations)[nLoop].nDivedSimNum++;
 		//　初期質量の計算
 		double n1 = (*simulations)[nLoop].layers[0].n;
 		double n2 = (*simulations)[nLoop].layers[1].n;
@@ -562,24 +614,21 @@ CString cMCML::StartSim(CString* chPathName, int nPathName, CString* cstrB32Name
 		unsigned int InitState = 0;
 		// フォトンの分割数に基づいて繰り返し
 		auto Start = std::chrono::system_clock::now();
-		for (int nDivNum = 0; nDivNum < m_simulations[nRun].nDivedSimNum; nDivNum++){
-			// RNG の初期化
-			// InitState = InitRNG( m_simulations[nRun].number_of_photons, cstrB32Name, Seed);
-			// if (InitState != 0) {
-			// 	FreeFailedSimStrct(m_simulations, m_nRunCount);
-			// 	Tmp2.Format(_T("%x"), InitState);
-			// 	return _T("InitRng Error !") + Tmp2;
-			// }
+//		for (int nDivNum = 0; nDivNum < m_simulations[nRun].nDivedSimNum; nDivNum++){
+		int RunStatus = cCUDAMCML::MakeRandTableDev();
+		 RunStatus = cCUDAMCML::InitPhoton();		
+		
+		// Run a simulation
+		RunStatus = DoOneSimulation(&m_simulations[nRun]);
 
-			// Run a simulation
-			int RunStatus = DoOneSimulation(&m_simulations[nRun]);
+		// cCUDAMCML::RunOldCarnel();
 
-			if (RunStatus != 0){
-				FreeSimulationStruct(m_simulations, m_nRunCount);
-				Tmp2.Format(_T("%d"), RunStatus);
-				return _T("RunSim Error:") + Tmp2;
-			}
+		if (RunStatus != 0){
+			FreeSimulationStruct(m_simulations, m_nRunCount);
+			Tmp2.Format(_T("%d"), RunStatus);
+			return _T("RunSim Error:") + Tmp2;
 		}
+//		}
 		auto End = std::chrono::system_clock::now();
 		auto AveDur = (End - Start) / m_simulations[nRun].nDivedSimNum;
 		m_simulations[nRun].RecordDoSim.procAvergTime = std::chrono::duration_cast<std::chrono::milliseconds>(AveDur).count();

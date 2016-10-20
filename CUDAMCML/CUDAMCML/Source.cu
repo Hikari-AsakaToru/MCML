@@ -28,8 +28,144 @@ __shared__ PhotonStruct dsh_sPhoton[NUM_THREADS_PER_BLOCK];
 //
 // MCML計算の本体
 // 
+template <int ignoreAdetection> __global__ void MCd(MemStruct DeviceMem)
+{
+	//Block index
+	int bx = blockIdx.x;
 
- template <int ignoreAdetection> __global__ void CalcMCGPU(MemStruct DeviceMem)
+	//Thread index
+	int tx = threadIdx.x;
+
+
+	//First element processed by the block
+	int begin = blockDim.x*bx;
+
+
+
+	unsigned long long int x = DeviceMem.x[begin + tx];//coherent
+	unsigned int a = DeviceMem.a[begin + tx];//coherent
+
+	float s;	//step length
+
+	unsigned long long index, w, index_old,DataPos;
+	index_old = 0;
+	w = 0;
+	unsigned int w_temp;
+	DataPos = *DeviceMem.num_terminated_photons;
+
+	PhotonStruct p = DeviceMem.p[begin + tx];
+	
+
+	int new_layer;
+
+	//First, make sure the thread (photon) is active
+	unsigned int ii = 0;
+	if (!DeviceMem.thread_active[begin + tx]){
+		ii = NUMSTEPS_GPU;
+	}
+
+	for (; ii<NUMSTEPS_GPU; ii++) //this is the main while loop
+	{
+		if (layers_dc[p.layer].mutr != FLT_MAX)
+			s = -__logf(rand_MWC_oc(&x, &a))*layers_dc[p.layer].mutr;//sample step length [cm] //HERE AN OPEN_OPEN FUNCTION WOULD BE APPRECIATED
+		else
+			s = 100.0f;//temporary, say the step in glass is 100 cm.
+
+		//Check for layer transitions and in case, calculate s
+		new_layer = p.layer;
+		if (p.z + s*p.dz<layers_dc[p.layer].z_min){ new_layer--; s = __fdividef(layers_dc[p.layer].z_min - p.z, p.dz); } //Check for upwards reflection/transmission & calculate new s
+		if (p.z + s*p.dz>layers_dc[p.layer].z_max){ new_layer++; s = __fdividef(layers_dc[p.layer].z_max - p.z, p.dz); } //Check for downward reflection/transmission
+
+		p.x += p.dx*s;
+		p.y += p.dy*s;
+		p.z += p.dz*s;
+
+		if (p.z>layers_dc[p.layer].z_max)p.z = layers_dc[p.layer].z_max;//needed?
+		if (p.z<layers_dc[p.layer].z_min)p.z = layers_dc[p.layer].z_min;//needed?
+
+		if (new_layer != p.layer)
+		{
+			// set the remaining step length to 0
+			s = 0.0f;
+
+			if (Reflect(&p, new_layer, &x, &a) == 0u)//Check for reflection
+			{ // Photon is transmitted
+				if (new_layer == 0)
+				{ //Diffuse reflectance
+					index = __float2int_rz(acosf(-p.dz)*2.0f*RPI*det_dc[0].na)*det_dc[0].nr + min(__float2int_rz(__fdividef(sqrtf(p.x*p.x + p.y*p.y), det_dc[0].dr)), (int)det_dc[0].nr - 1);
+					AtomicAddULL(&DeviceMem.Rd_ra[index], p.weight);
+					p.weight = 0; // Set the remaining weight to 0, effectively killing the photon
+				}
+				if (new_layer > *n_layers_dc)
+				{	//Transmitted
+					index = __float2int_rz(acosf(p.dz)*2.0f*RPI*det_dc[0].na)*det_dc[0].nr + min(__float2int_rz(__fdividef(sqrtf(p.x*p.x + p.y*p.y), det_dc[0].dr)), (int)det_dc[0].nr - 1);
+					AtomicAddULL(&DeviceMem.Tt_ra[index], p.weight);
+					p.weight = 0; // Set the remaining weight to 0, effectively killing the photon
+				}
+			}
+		}
+
+		//w=0;
+
+		if (s > 0.0f)
+		{
+			// Drop weight (apparently only when the photon is scattered)
+			w_temp = __float2uint_rn(layers_dc[p.layer].mua*layers_dc[p.layer].mutr*__uint2float_rn(p.weight));
+			p.weight -= w_temp;
+
+
+			//w = __float2uint_rn(layers_dc[p.layer].mua*layers_dc[p.layer].mutr*__uint2float_rn(p.weight));
+			//p.weight -= w;
+
+			if (ignoreAdetection == 0) // Evaluated at compiletime!
+			{
+				index = (min(__float2int_rz(__fdividef(p.z, det_dc[0].dz)), (int)det_dc[0].nz - 1)*det_dc[0].nr + min(__float2int_rz(__fdividef(sqrtf(p.x*p.x + p.y*p.y), det_dc[0].dr)), (int)det_dc[0].nr - 1));
+				if (index == index_old)
+				{
+					w += w_temp;
+					//p.weight -= __float2uint_rn(layers_dc[p.layer].mua*layers_dc[p.layer].mutr*__uint2float_rn(p.weight)); 
+				}
+				else// if(w!=0)
+				{
+					AtomicAddULL(&DeviceMem.A_rz[index_old], w);
+					index_old = index;
+					w = w_temp;
+				}
+
+			}
+
+			Spin(&p, &x, &a, layers_dc[p.layer].g);
+		}
+
+
+
+
+		if (!PhotonSurvive(&p, &x, &a)) // Check if photons survives or not
+		{
+			if (atomicAdd(DeviceMem.num_terminated_photons, 1u) < (*num_photons_dc))
+			{	// Ok to launch another photon
+				LaunchPhoton(&p);//Launch a new photon
+			}
+			else
+			{	// No more photons should be launched. 
+				DeviceMem.thread_active[DataPos] = 0u; // Set thread to inactive
+				ii = NUMSTEPS_GPU;				// Exit main loop
+			}
+
+		}
+	}//end main for loop!
+	if (ignoreAdetection == 1 && w != 0)
+		AtomicAddULL(&DeviceMem.A_rz[index_old], w);
+
+	__syncthreads();//necessary?
+
+	//save the state of the MC simulation in global memory before exiting
+	DeviceMem.p[DataPos] = p;	//This one is incoherent!!!
+	DeviceMem.x[DataPos] = x; //this one also seems to be coherent
+
+
+}//end MCd
+template <int ignoreAdetection> __global__ void CalcMCGPU(MemStruct DeviceMem)
 {
 	//Block index
 	int bx = blockIdx.x;
@@ -114,13 +250,13 @@ __shared__ PhotonStruct dsh_sPhoton[NUM_THREADS_PER_BLOCK];
 				if (new_layer == 0)
 				{	// Diffuse reflectance　拡散反射
 					// __float2int_rz ・・・float  => int　への型変換(小数点切り捨て？)
-					index = __float2int_rz(acosf(-dsh_sPhoton[tx].dz)*2.0f*RPI/det_dc[0].na)*det_dc[0].nr + min(__float2int_rz(__fdividef(sqrtf(dsh_sPhoton[tx].x*dsh_sPhoton[tx].x + dsh_sPhoton[tx].y*dsh_sPhoton[tx].y), det_dc[0].dr)), (int)det_dc[0].nr - 1);
+					index = __float2int_rz(acosf(-dsh_sPhoton[tx].dz)*2.0f*RPI*det_dc[0].na)*det_dc[0].nr + min(__float2int_rz(__fdividef(sqrtf(dsh_sPhoton[tx].x*dsh_sPhoton[tx].x + dsh_sPhoton[tx].y*dsh_sPhoton[tx].y), det_dc[0].dr)), (int)det_dc[0].nr - 1);
 					AtomicAddULL(&DeviceMem.Rd_ra[index], dsh_sPhoton[tx].weight);
 					dsh_sPhoton[tx].weight = 0;
 				}
 				if (new_layer > *n_layers_dc)
 				{	//Transmitted　透過
-					index = __float2int_rz(acosf(dsh_sPhoton[tx].dz)*2.0f*RPI/det_dc[0].na)*det_dc[0].nr + min(__float2int_rz(__fdividef(sqrtf(dsh_sPhoton[tx].x*dsh_sPhoton[tx].x + dsh_sPhoton[tx].y*dsh_sPhoton[tx].y), det_dc[0].dr)), (int)det_dc[0].nr - 1);
+					index = __float2int_rz(acosf(dsh_sPhoton[tx].dz)*2.0f*RPI*det_dc[0].na)*det_dc[0].nr + min(__float2int_rz(__fdividef(sqrtf(dsh_sPhoton[tx].x*dsh_sPhoton[tx].x + dsh_sPhoton[tx].y*dsh_sPhoton[tx].y), det_dc[0].dr)), (int)det_dc[0].nr - 1);
 					AtomicAddULL(&DeviceMem.Tt_ra[index], dsh_sPhoton[tx].weight);
 					dsh_sPhoton[tx].weight = 0;
 				}
@@ -157,13 +293,10 @@ __shared__ PhotonStruct dsh_sPhoton[NUM_THREADS_PER_BLOCK];
 
 		if (!PhotonSurvive(&dsh_sPhoton[tx], &x, &a)) // Check if photons survives or not
 		{
-			if (atomicAdd(DeviceMem.num_terminated_photons, 1ul)<(num_photons_dc[0])){
-				LaunchPhoton(&dsh_sPhoton[tx]);
-			}
-			else{
+
 				DeviceMem.thread_active[begin + tx] = 0;
 				break;
-			}
+
 		}
 	}//end main for loop!
 	if (ignoreAdetection == 1 && w != 0)
@@ -201,7 +334,6 @@ __device__  void LaunchPhoton(PhotonStruct* p)
 __global__ void LaunchPhoton_Global(PhotonStruct* pd)
 {
 	unsigned long long PosData = blockIdx.x*NUM_THREADS_PER_BLOCK + threadIdx.x;
-
 	//First element processed by the block
 	if (PosData < num_photons_dc[0]){
 	
@@ -221,28 +353,30 @@ __global__ void LaunchPhoton_Global(PhotonStruct* pd)
 	return;
 }
 
-__global__ void InitRng(unsigned long long * X, unsigned int *A){
-	curandState_t RndMaker;
+__global__ void InitRng(MemStruct devMem){
+	curandState RndMaker[3];
+	unsigned long long* X = devMem.x;
+	unsigned int* A = devMem.a;
 	unsigned long long un64PosData = blockIdx.x*NUM_THREADS_PER_BLOCK_MAKE_RAND + threadIdx.x;
-	curand_init((unsigned long long)*dc_Seed, un64PosData, 0, &RndMaker);
+	curand_init((unsigned long long)*dc_Seed, un64PosData, 0, &RndMaker[0]);
+	curand_init(2*(unsigned long long)*dc_Seed, un64PosData, 0, &RndMaker[1]);
+	curand_init(3*(unsigned long long)*dc_Seed, un64PosData, 0, &RndMaker[2]);
 	for (int nLoop = 0; nLoop < (num_photons_dc[0] / (NUM_DIV_MAKE_RAND*NUM_THREADS_PER_BLOCK_MAKE_RAND) + 1); nLoop++){
 		if (un64PosData < num_photons_dc[0]){
 			unsigned int TmpRndH, TmpRndL;
-			TmpRndH = curand(&RndMaker);
+			TmpRndH = curand(&RndMaker[0]);
 			__syncthreads();
-			TmpRndL = curand(&RndMaker);
+			TmpRndL = curand(&RndMaker[1]);
 			unsigned long long TmpRAXH = ((unsigned long long)TmpRndH) << 32;
 			X[un64PosData] = TmpRAXH | (unsigned long long)TmpRndL;
 			__syncthreads();
-			TmpRndL = curand(&RndMaker);
+			TmpRndL = curand(&RndMaker[2]);
 			A[un64PosData] = TmpRndL;
 			un64PosData += NUM_DIV_MAKE_RAND*NUM_THREADS_PER_BLOCK_MAKE_RAND;
 
 		}
 	}
-	if (threadIdx.x == 0 && blockIdx.x==0){
-		nInitRngLoop++;
-	}
+
 	return;
 }
 __device__ double SpinTheta(unsigned long long int* x, unsigned int *a, double g){
@@ -414,7 +548,68 @@ cCUDAMCML::cCUDAMCML(){
 }
 cCUDAMCML::~cCUDAMCML(){
 }
+void cCUDAMCML::RunOldCarnel(){
+	dim3 dimGrid(NUM_GRID_PER_BLOCK);
+	dim3 dimBlock(NUM_THREADS_PER_BLOCK);
+	unsigned int threads_active_total = 1;
+	int i = 0;
+	while (*m_sHostMem.num_terminated_photons < m_simulations->number_of_photons)
+	{
+		i++;
+		//run the kernel
+		if (m_simulations->ignoreAdetection == 1){
+			MCd<1> << <dimGrid, dimBlock >> >(m_sDeviceMem);
+		}
+		else{
+			MCd<0> << <dimGrid, dimBlock >> >(m_sDeviceMem);
+		}
+		cudaThreadSynchronize(); // Wait for all threads to finish
+		cudaError_t cudastat = cudaGetLastError(); // Check if there was an error
+
+		// Copy thread_active from device to host
+		cudaMemcpy(m_sHostMem.thread_active, m_sDeviceMem.thread_active, NUM_THREADS*sizeof(unsigned int), cudaMemcpyDeviceToHost);
+		threads_active_total = 0;
+		for (int ii = 0; ii < NUM_THREADS; ii++){
+			threads_active_total += m_sHostMem.thread_active[ii];
+		}
+
+		cudaMemcpy(m_sHostMem.num_terminated_photons, m_sDeviceMem.num_terminated_photons, sizeof(unsigned int), cudaMemcpyDeviceToHost);
+		cudaMemcpy(m_sHostMem.p, m_sDeviceMem.p, sizeof(PhotonStruct)*m_simulations->number_of_photons, cudaMemcpyDeviceToHost);
+	}
+	CopyDeviceToHostMem(&m_sHostMem, &m_sDeviceMem, m_simulations);
+}
 // 計算の中枢
+int cCUDAMCML::MakeRandTableDev(){
+
+	dim3 dimNumBlockRand(NUM_DIV_MAKE_RAND);
+	dim3 dimNumThreadRand(NUM_THREADS_PER_BLOCK_MAKE_RAND);
+
+	// シード，初期値として用いる乱数配列の作成
+	// MCMLの乱数生成に利用できない　⇒　ライブラリの都合上，スレッド数が制限されるため
+	InitRng << < dimNumBlockRand, dimNumThreadRand >> > (m_sDeviceMem);
+	// 検証用
+	// cudaMemcpy(m_sHostMem.a, m_sDeviceMem.a, simulation->number_of_photons * sizeof(unsigned int), cudaMemcpyDeviceToHost);
+	// cudaMemcpy(m_sHostMem.x, m_sDeviceMem.x, simulation->number_of_photons * sizeof(unsigned long long), cudaMemcpyDeviceToHost);
+	cudaError_t  cudastat = cudaGetLastError();	// Check if there was an error
+	if (cudastat){
+		return _ERR_GPU_SIM_RND_;
+	}
+	return 0;
+}
+int cCUDAMCML::InitPhoton(){
+
+
+	dim3 dimNumBlock(19);
+	dim3 dimNumThread(NUM_THREADS_PER_BLOCK);
+
+	LaunchPhoton_Global << < dimNumBlock, dimNumThread >> > (m_sDeviceMem.p);
+	cudaError_t cudastat = cudaGetLastError();	// Check if there was an error
+
+	if (cudastat){
+		return _ERR_GPU_SIM_LANCH_PHOTON_;
+	}
+	return 0;
+}
 int cCUDAMCML::DoOneSimulation(SimulationStruct* simulation)
 {
 
@@ -426,30 +621,8 @@ int cCUDAMCML::DoOneSimulation(SimulationStruct* simulation)
 	int STAT=0;
 	// Start the clock
 
-	dim3 dimNumBlockRand(NUM_DIV_MAKE_RAND);
-	dim3 dimNumThreadRand(NUM_THREADS_PER_BLOCK_MAKE_RAND);
-
-	// シード，初期値として用いる乱数配列の作成
-	// MCMLの乱数生成に利用できない　⇒　ライブラリの都合上，スレッド数が制限されるため
-	InitRng << < dimNumBlockRand, dimNumThreadRand >> > (m_sDeviceMem.x , m_sDeviceMem.a);
-	// 検証用
-	// cudaMemcpy(m_sHostMem.a, m_sDeviceMem.a, simulation->number_of_photons * sizeof(unsigned int), cudaMemcpyDeviceToHost);
-	// cudaMemcpy(m_sHostMem.x, m_sDeviceMem.x, simulation->number_of_photons * sizeof(unsigned long long), cudaMemcpyDeviceToHost);
-
 	dim3 dimNumBlock(19);
 	dim3 dimNumThread(NUM_THREADS_PER_BLOCK);
-
-	cudastat = cudaGetLastError();	// Check if there was an error
-	if (cudastat){
-		return _ERR_GPU_SIM_RND_;
-	}
-
-	LaunchPhoton_Global << < dimNumBlock, dimNumThread >> > (m_sDeviceMem.p);
-	cudastat = cudaGetLastError();	// Check if there was an error
-
-	if (cudastat){
-		return _ERR_GPU_SIM_LANCH_PHOTON_;
-	}
 
 	//run the kernel
 	if (simulation->ignoreAdetection == 1){
@@ -774,7 +947,7 @@ int cCUDAMCML::InitContentsMem(SimulationStruct* sim)
 	}
 
 	for (int i = 0; i < sim->number_of_photons; i++){
-		HostMem->thread_active[i] = 0u;
+		HostMem->thread_active[i] = 1u;
 	}
 
 

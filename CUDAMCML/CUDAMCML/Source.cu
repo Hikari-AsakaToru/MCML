@@ -117,14 +117,12 @@ __shared__ PhotonStruct dsh_sPhoton[NUM_THREADS_PER_BLOCK];
 					index = __float2int_rz(acosf(-dsh_sPhoton[tx].dz)*2.0f*RPI/det_dc[0].na)*det_dc[0].nr + min(__float2int_rz(__fdividef(sqrtf(dsh_sPhoton[tx].x*dsh_sPhoton[tx].x + dsh_sPhoton[tx].y*dsh_sPhoton[tx].y), det_dc[0].dr)), (int)det_dc[0].nr - 1);
 					AtomicAddULL(&DeviceMem.Rd_ra[index], dsh_sPhoton[tx].weight);
 					dsh_sPhoton[tx].weight = 0;
-					break;
 				}
 				if (new_layer > *n_layers_dc)
 				{	//TransmittedÅ@ìßâﬂ
 					index = __float2int_rz(acosf(dsh_sPhoton[tx].dz)*2.0f*RPI/det_dc[0].na)*det_dc[0].nr + min(__float2int_rz(__fdividef(sqrtf(dsh_sPhoton[tx].x*dsh_sPhoton[tx].x + dsh_sPhoton[tx].y*dsh_sPhoton[tx].y), det_dc[0].dr)), (int)det_dc[0].nr - 1);
 					AtomicAddULL(&DeviceMem.Tt_ra[index], dsh_sPhoton[tx].weight);
 					dsh_sPhoton[tx].weight = 0;
-					break;
 				}
 			}
 		}
@@ -159,10 +157,15 @@ __shared__ PhotonStruct dsh_sPhoton[NUM_THREADS_PER_BLOCK];
 
 		if (!PhotonSurvive(&dsh_sPhoton[tx], &x, &a)) // Check if photons survives or not
 		{
-			break;				// Exit main loop
+			if (atomicAdd(DeviceMem.num_terminated_photons, 1ul)<(num_photons_dc[0])){
+				LaunchPhoton(&dsh_sPhoton[tx]);
+			}
+			else{
+				DeviceMem.thread_active[begin + tx] = 0;
+				break;
+			}
 		}
 	}//end main for loop!
-	atomicAdd(DeviceMem.num_terminated_photons, 1ul);
 	if (ignoreAdetection == 1 && w != 0)
 		AtomicAddULL(&DeviceMem.A_rz[index_old], w);
 
@@ -172,7 +175,7 @@ __shared__ PhotonStruct dsh_sPhoton[NUM_THREADS_PER_BLOCK];
 //	dsh_sPhoton[tx] = sharedp;	//This one is incoherent!!!
 
 	DeviceMem.x[begin + tx] = x; //this one also seems to be coherent
-	DeviceMem.p[begin + tx] = dsh_sPhoton[tx];
+	DeviceMem.p[begin + tx] = dsh_sPhoton[tx]; //this one also seems to be coherent
 
 
 }//end MCd
@@ -433,7 +436,7 @@ int cCUDAMCML::DoOneSimulation(SimulationStruct* simulation)
 	// cudaMemcpy(m_sHostMem.a, m_sDeviceMem.a, simulation->number_of_photons * sizeof(unsigned int), cudaMemcpyDeviceToHost);
 	// cudaMemcpy(m_sHostMem.x, m_sDeviceMem.x, simulation->number_of_photons * sizeof(unsigned long long), cudaMemcpyDeviceToHost);
 
-	dim3 dimNumBlock(simulation->number_of_photons / NUM_THREADS_PER_BLOCK + 1);
+	dim3 dimNumBlock(19);
 	dim3 dimNumThread(NUM_THREADS_PER_BLOCK);
 
 	cudastat = cudaGetLastError();	// Check if there was an error

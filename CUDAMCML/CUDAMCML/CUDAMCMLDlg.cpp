@@ -468,20 +468,20 @@ CString cMCML::ReadSimData(CString* filename, SimulationStruct** simulations, in
 		
 		// スレッド数の決定
 		// フォトンの数とメッシュ数に応じたGPUの必要メモリを算出
-//		(*simulations)[nLoop].nDivedSimNum = 1;
-//		m_un64Membyte = (sizeof(PhotonStruct) + sizeof(unsigned long long) + 2 * sizeof(int))*(*simulations)[nLoop].number_of_photons + sizeof(unsigned int)
-//			+ sizeof(unsigned long long)*((*simulations)[nLoop].det.nr*((*simulations)[nLoop].det.nz + 2 * (*simulations)[nLoop].det.na));
-//		// 全体をGPU上に乗せることができるか？　 
-//		while ((m_un64Membyte > (unsigned long long)(m_sDevProp.totalGlobalMem*0.9)) && (((*simulations)[nLoop].number_of_photons / NUM_THREADS_PER_BLOCK + 1)>(m_sDevProp.multiProcessorCount-1))){
-//			// 不可能な場合=>フォトン数を半減=実行スレッド数を半減
-//			(*simulations)[nLoop].number_of_photons /= 2;
-//			// 分割数 
-//			(*simulations)[nLoop].nDivedSimNum *= 2;
-//			m_un64Membyte = (sizeof(PhotonStruct) + sizeof(unsigned long long) + 3 * sizeof(int))*(*simulations)[nLoop].number_of_photons
-//				+ sizeof(unsigned long long)*((*simulations)[nLoop].det.nr*((*simulations)[nLoop].det.nz + 2 * (*simulations)[nLoop].det.na));
-//		}
-//		(*simulations)[nLoop].nDivedSimNum *= m_un64NumPhoton / (*simulations)[nLoop].number_of_photons;
-//		(*simulations)[nLoop].nDivedSimNum++;
+		(*simulations)[nLoop].nDivedSimNum = 1;
+		m_un64Membyte = (sizeof(PhotonStruct) + sizeof(unsigned long long) + 2 * sizeof(int))*(*simulations)[nLoop].number_of_photons + sizeof(unsigned int)
+		+ sizeof(unsigned long long)*((*simulations)[nLoop].det.nr*((*simulations)[nLoop].det.nz + 2 * (*simulations)[nLoop].det.na));
+		// 全体をGPU上に乗せることができるか？　 
+		while ((m_un64Membyte > (unsigned long long)(m_sDevProp.totalGlobalMem*0.9)) && (((*simulations)[nLoop].number_of_photons / NUM_THREADS_PER_BLOCK + 1)>(m_sDevProp.multiProcessorCount-1))){
+			// 不可能な場合=>フォトン数を半減=実行スレッド数を半減
+			(*simulations)[nLoop].number_of_photons /= 2;
+			// 分割数 
+			(*simulations)[nLoop].nDivedSimNum *= 2;
+			m_un64Membyte = (sizeof(PhotonStruct) + sizeof(unsigned long long) + 3 * sizeof(int))*(*simulations)[nLoop].number_of_photons
+				+ sizeof(unsigned long long)*((*simulations)[nLoop].det.nr*((*simulations)[nLoop].det.nz + 2 * (*simulations)[nLoop].det.na));
+		}
+		(*simulations)[nLoop].nDivedSimNum *= m_un64NumPhoton / (*simulations)[nLoop].number_of_photons;
+		(*simulations)[nLoop].nDivedSimNum++;
 		//　初期質量の計算
 		double n1 = (*simulations)[nLoop].layers[0].n;
 		double n2 = (*simulations)[nLoop].layers[1].n;
@@ -614,21 +614,21 @@ CString cMCML::StartSim(CString* chPathName, int nPathName, CString* cstrB32Name
 		unsigned int InitState = 0;
 		// フォトンの分割数に基づいて繰り返し
 		auto Start = std::chrono::system_clock::now();
-//		for (int nDivNum = 0; nDivNum < m_simulations[nRun].nDivedSimNum; nDivNum++){
-		int RunStatus = cCUDAMCML::MakeRandTableDev();
-		 RunStatus = cCUDAMCML::InitPhoton();		
+		for (int nDivNum = 0; nDivNum < m_simulations[nRun].nDivedSimNum; nDivNum++){
+		int	 RunStatus = cCUDAMCML::MakeRandTableDev();
+			 RunStatus = cCUDAMCML::InitPhoton();		
 		
-		// Run a simulation
-		RunStatus = DoOneSimulation(&m_simulations[nRun]);
+			// Run a simulation
+			RunStatus = DoOneSimulation(&m_simulations[nRun]);
 
-		// cCUDAMCML::RunOldCarnel();
+			// cCUDAMCML::RunOldCarnel();
 
-		if (RunStatus != 0){
-			FreeSimulationStruct(m_simulations, m_nRunCount);
-			Tmp2.Format(_T("%d"), RunStatus);
-			return _T("RunSim Error:") + Tmp2;
+			if (RunStatus != 0){
+				FreeSimulationStruct(m_simulations, m_nRunCount);
+				Tmp2.Format(_T("%d"), RunStatus);
+				return _T("RunSim Error:") + Tmp2;
+			}
 		}
-//		}
 		auto End = std::chrono::system_clock::now();
 		auto AveDur = (End - Start) / m_simulations[nRun].nDivedSimNum;
 		m_simulations[nRun].RecordDoSim.procAvergTime = std::chrono::duration_cast<std::chrono::milliseconds>(AveDur).count();

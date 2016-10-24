@@ -9,7 +9,7 @@
 #include "CUDAMCMLDlg.h"
 #include "afxdialogex.h"
 #include <string>
-#include <chrono>
+
 #ifdef _DEBUG
 #define new DEBUG_NEW
 #endif
@@ -615,8 +615,8 @@ CString cMCML::StartSim(CString* chPathName, int nPathName, CString* cstrB32Name
 		// ƒtƒHƒgƒ“‚Ì•ªŠ„”‚ÉŠî‚Ã‚¢‚ÄŒJ‚è•Ô‚µ
 		auto Start = std::chrono::system_clock::now();
 		for (int nDivNum = 0; nDivNum < m_simulations[nRun].nDivedSimNum; nDivNum++){
-		int	 RunStatus = cCUDAMCML::MakeRandTableDev();
-			 RunStatus = cCUDAMCML::InitPhoton();		
+		int	 RunStatus = MakeRandTableDev();
+			 RunStatus = InitPhoton();		
 		
 			// Run a simulation
 			RunStatus = DoOneSimulation(&m_simulations[nRun]);

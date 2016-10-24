@@ -176,6 +176,9 @@ template <int ignoreAdetection> __global__ void CalcMCGPU(MemStruct DeviceMem)
 
 	//First element processed by the block
 	int begin = blockDim.x*bx;
+	if (DeviceMem.thread_active[begin + tx] == 65535){
+		return;
+	}
 	if (DeviceMem.thread_active[begin + tx]){
 		auto temp = atomicAdd(DeviceMem.num_terminated_photons, 1ul);
 		if (temp > *num_photons_dc){
@@ -184,9 +187,7 @@ template <int ignoreAdetection> __global__ void CalcMCGPU(MemStruct DeviceMem)
 		}
 		DeviceMem.thread_active[begin + tx] = 0;
 	}
-	if (DeviceMem.thread_active[begin + tx] == 65535){
-		return;
-	}
+
 	DeviceMem.thread_active[begin + tx] = 0;
 	unsigned long long int x = DeviceMem.x[begin + tx];	//coherent
 	unsigned int a = DeviceMem.a[begin + tx];			//coherent
@@ -255,13 +256,13 @@ template <int ignoreAdetection> __global__ void CalcMCGPU(MemStruct DeviceMem)
 				{	// Diffuse reflectance　拡散反射
 					// __float2int_rz ・・・float  => int　への型変換(小数点切り捨て？)
 //					index = __float2int_rz(acosf(-dsh_sPhoton[tx].dz)*2.0f*RPI*det_dc[0].na)*det_dc[0].nr + min(__float2int_rz(__fdividef(sqrtf(dsh_sPhoton[tx].x*dsh_sPhoton[tx].x + dsh_sPhoton[tx].y*dsh_sPhoton[tx].y), det_dc[0].dr)), (int)det_dc[0].nr - 1);
-					index = __float2int_rz(acosf(-dsh_sPhoton[tx].dz)/(PI/det_dc[0].na))*det_dc[0].nr + min(__float2int_rz(__fdividef(sqrtf(dsh_sPhoton[tx].x*dsh_sPhoton[tx].x + dsh_sPhoton[tx].y*dsh_sPhoton[tx].y), det_dc[0].dr)), (int)det_dc[0].nr - 1);
+					index = __float2int_rz(__fdividef(acosf(-dsh_sPhoton[tx].dz) , (PI / det_dc[0].na)))*det_dc[0].nr + min(__float2int_rz(__fdividef(sqrtf(dsh_sPhoton[tx].x*dsh_sPhoton[tx].x + dsh_sPhoton[tx].y*dsh_sPhoton[tx].y), det_dc[0].dr)), (int)det_dc[0].nr - 1);
 					AtomicAddULL(&DeviceMem.Rd_ra[index], dsh_sPhoton[tx].weight);
 					dsh_sPhoton[tx].weight = 0;
 				}
 				if (new_layer > *n_layers_dc)
 				{	//Transmitted　透過
-					index = __float2int_rz(acosf(dsh_sPhoton[tx].dz) / (PI / det_dc[0].na))*det_dc[0].nr + min(__float2int_rz(__fdividef(sqrtf(dsh_sPhoton[tx].x*dsh_sPhoton[tx].x + dsh_sPhoton[tx].y*dsh_sPhoton[tx].y), det_dc[0].dr)), (int)det_dc[0].nr - 1);
+					index = __float2int_rz(__fdividef(acosf(dsh_sPhoton[tx].dz) , (PI / det_dc[0].na)))*det_dc[0].nr + min(__float2int_rz(__fdividef(sqrtf(dsh_sPhoton[tx].x*dsh_sPhoton[tx].x + dsh_sPhoton[tx].y*dsh_sPhoton[tx].y), det_dc[0].dr)), (int)det_dc[0].nr - 1);
 					AtomicAddULL(&DeviceMem.Tt_ra[index], dsh_sPhoton[tx].weight);
 					dsh_sPhoton[tx].weight = 0;
 				}

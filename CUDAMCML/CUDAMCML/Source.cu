@@ -256,13 +256,13 @@ template <int ignoreAdetection> __global__ void CalcMCGPU(MemStruct DeviceMem)
 				{	// Diffuse reflectance　拡散反射
 					// __float2int_rz ・・・float  => int　への型変換(小数点切り捨て？)
 //					index = __float2int_rz(acosf(-dsh_sPhoton[tx].dz)*2.0f*RPI*det_dc[0].na)*det_dc[0].nr + min(__float2int_rz(__fdividef(sqrtf(dsh_sPhoton[tx].x*dsh_sPhoton[tx].x + dsh_sPhoton[tx].y*dsh_sPhoton[tx].y), det_dc[0].dr)), (int)det_dc[0].nr - 1);
-					index = __float2int_rz(__fdividef(acosf(-dsh_sPhoton[tx].dz) , (PI / det_dc[0].na)))*det_dc[0].nr + min(__float2int_rz(__fdividef(sqrtf(dsh_sPhoton[tx].x*dsh_sPhoton[tx].x + dsh_sPhoton[tx].y*dsh_sPhoton[tx].y), det_dc[0].dr)), (int)det_dc[0].nr - 1);
+					index = __float2int_rz(__fdividef(acosf(-dsh_sPhoton[tx].dz) , (PI / det_dc[0].na)))*det_dc[0].nr + min(__float2int_rz(__fdividef(__fsqrt_rz(dsh_sPhoton[tx].x*dsh_sPhoton[tx].x + dsh_sPhoton[tx].y*dsh_sPhoton[tx].y), det_dc[0].dr)), (int)det_dc[0].nr - 1);
 					AtomicAddULL(&DeviceMem.Rd_ra[index], dsh_sPhoton[tx].weight);
 					dsh_sPhoton[tx].weight = 0;
 				}
 				if (new_layer > *n_layers_dc)
 				{	//Transmitted　透過
-					index = __float2int_rz(__fdividef(acosf(dsh_sPhoton[tx].dz) , (PI / det_dc[0].na)))*det_dc[0].nr + min(__float2int_rz(__fdividef(sqrtf(dsh_sPhoton[tx].x*dsh_sPhoton[tx].x + dsh_sPhoton[tx].y*dsh_sPhoton[tx].y), det_dc[0].dr)), (int)det_dc[0].nr - 1);
+					index = __float2int_rz(__fdividef(acosf(dsh_sPhoton[tx].dz), (PI / det_dc[0].na)))*det_dc[0].nr + min(__float2int_rz(__fdividef(__fsqrt_rz(dsh_sPhoton[tx].x*dsh_sPhoton[tx].x + dsh_sPhoton[tx].y*dsh_sPhoton[tx].y), det_dc[0].dr)), (int)det_dc[0].nr - 1);
 					AtomicAddULL(&DeviceMem.Tt_ra[index], dsh_sPhoton[tx].weight);
 					dsh_sPhoton[tx].weight = 0;
 				}
@@ -485,13 +485,27 @@ __device__ unsigned int Reflect(PhotonStruct* p, int new_layer, unsigned long lo
 			return 0u;
 		}
 	}
+	else
+	{
+		//long and boring calculations of r
+		float sinangle_i = sqrtf(1.0f - p->dz*p->dz);
+		float sinangle_e = n1/n2*sinangle_i;
+		float cosangle_e = sqrtf(1.0f - sinangle_e*sinangle_e);
 
+		float cossumangle = (p->dz*cosangle_e) - sinangle_i*sinangle_e;
+		float cosdiffangle = (p->dz*cosangle_e) + sinangle_i*sinangle_e;
+		float sinsumangle = sinangle_i*cosangle_e + (p->z*sinangle_e);
+		float sindiffangle = sinangle_i*cosangle_e - (p->z*sinangle_e);
+
+		r = 0.5*sindiffangle*sindiffangle*__fdividef((cosdiffangle*cosdiffangle + cossumangle*cossumangle), (sinsumangle*sinsumangle*cosdiffangle*cosdiffangle));
+
+	}
 	//gives almost exactly the same results as the old MCML way of doing the calculation but does it slightly faster
 	// save a few multiplications, calculate cos_angle_i^2;
-	float e = __fdividef(n1*n1, n2*n2)*(1.0f - cos_angle_i*cos_angle_i); //e is the sin square of the transmission angle
-	r = 2 * sqrtf((1.0f - cos_angle_i*cos_angle_i)*(1.0f - e)*e*cos_angle_i*cos_angle_i);//use r as a temporary variable
-	e = e + (cos_angle_i*cos_angle_i)*(1.0f - 2.0f*e);//Update the value of e
-	r = e*__fdividef((1.0f - e - r), ((1.0f - e + r)*(e + r)));//Calculate r	
+	//float e = __fdividef(n1*n1, n2*n2)*(1.0f - cos_angle_i*cos_angle_i); //e is the sin square of the transmission angle
+	//r = 2 * sqrtf((1.0f - cos_angle_i*cos_angle_i)*(1.0f - e)*e*cos_angle_i*cos_angle_i);//use r as a temporary variable
+	//e = e + (cos_angle_i*cos_angle_i)*(1.0f - 2.0f*e);//Update the value of e
+	//r = e*__fdividef((1.0f - e - r), ((1.0f - e + r)*(e + r)));//Calculate r	
 
 	if (rand_MWC_co(x, a) <= r)
 	{
@@ -503,7 +517,7 @@ __device__ unsigned int Reflect(PhotonStruct* p, int new_layer, unsigned long lo
 	{
 		// Transmission, update layer and direction
 		r = __fdividef(n1, n2);
-		e = r*r*(1.0f - cos_angle_i*cos_angle_i); //e is the sin square of the transmission angle
+		float e = r*r*(1.0f - cos_angle_i*cos_angle_i); //e is the sin square of the transmission angle
 		p->dx *= r;
 		p->dy *= r;
 		p->dz = copysignf(sqrtf(1 - e), p->dz);

@@ -11,7 +11,9 @@
 #define _ERR_GPU_SIM_MCML_ 5
 #define _ERR_GPU_SIM_ANOTHER_ 0xFF
 #define _SUCCESS_GPU_SIM_ 0
-
+#define PARTIALREFLECTION 1     
+#define GNUCC 0
+/* 1=split photon, 0=statistical reflection. */
 
 // MemStruct m_sDeviceMem;
 
@@ -25,10 +27,11 @@ __device__ unsigned int nInitRngLoop=0;
 
 __shared__ PhotonStruct dsh_sPhoton[NUM_THREADS_PER_BLOCK];
 
+
 //
 // MCML計算の本体
 // 
-template <int ignoreAdetection> __global__ void MCd(MemStruct DeviceMem)
+template <int ignoreAdetection> __global__ void MCd(MemStruct DeviceMem,PhotonStruct p)
 {
 	//Block index
 	int bx = blockIdx.x;
@@ -46,6 +49,7 @@ template <int ignoreAdetection> __global__ void MCd(MemStruct DeviceMem)
 	unsigned int a = DeviceMem.a[begin + tx];//coherent
 
 	float s;	//step length
+	//p->s = s;   //PhotonStructのsとの同期が必要？
 
 	unsigned long long index, w, index_old,DataPos;
 	index_old = 0;
@@ -67,7 +71,7 @@ template <int ignoreAdetection> __global__ void MCd(MemStruct DeviceMem)
 	for (; ii<NUMSTEPS_GPU; ii++) //this is the main while loop
 	{
 		if (layers_dc[p.layer].mutr != FLT_MAX)
-			s = -__logf(rand_MWC_oc(&x, &a))*layers_dc[p.layer].mutr;//sample step length [cm] //HERE AN OPEN_OPEN FUNCTION WOULD BE APPRECIATED
+			ps = -__logf(rand_MWC_oc(&x, &a))*layers_dc[p.layer].mutr;//sample step length [cm] //HERE AN OPEN_OPEN FUNCTION WOULD BE APPRECIATED
 		else
 			s = 100.0f;//temporary, say the step in glass is 100 cm.
 
@@ -165,7 +169,10 @@ template <int ignoreAdetection> __global__ void MCd(MemStruct DeviceMem)
 
 
 }//end MCd
-template <int ignoreAdetection> __global__ void CalcMCGPU(MemStruct DeviceMem)
+template <int ignoreAdetection> __global__ void CalcMCGPU(MemStruct DeviceMem,
+														InputStruct  *	In_Ptr,
+														PhotonStruct *	p,
+														OutStruct *		Out_Ptr)
 {
 	//Block index
 	int bx = blockIdx.x;
@@ -192,7 +199,8 @@ template <int ignoreAdetection> __global__ void CalcMCGPU(MemStruct DeviceMem)
 	unsigned long long int x = DeviceMem.x[begin + tx];	//coherent
 	unsigned int a = DeviceMem.a[begin + tx];			//coherent
 	dsh_sPhoton[tx] = DeviceMem.p[begin + tx];
-	float s;											//step length
+	float s; //step length
+	
 
 	unsigned int index, index_old;
 	index_old = 0;
@@ -259,6 +267,7 @@ template <int ignoreAdetection> __global__ void CalcMCGPU(MemStruct DeviceMem)
 					index = __float2int_rz(__fdividef(acosf(-dsh_sPhoton[tx].dz) , (PI / det_dc[0].na)))*det_dc[0].nr + min(__float2int_rz(__fdividef(__fsqrt_rz(dsh_sPhoton[tx].x*dsh_sPhoton[tx].x + dsh_sPhoton[tx].y*dsh_sPhoton[tx].y), det_dc[0].dr)), (int)det_dc[0].nr - 1);
 					AtomicAddULL(&DeviceMem.Rd_ra[index], dsh_sPhoton[tx].weight);
 					dsh_sPhoton[tx].weight = 0;
+					RecordR(dsh_sPhoton[tx]->rr, In_Ptr, dsh_sPhoton[tx], Out_Ptr);//rをどうやって持ってくればいいのか
 				}
 				if (new_layer > *n_layers_dc)
 				{	//Transmitted　透過
@@ -315,11 +324,19 @@ template <int ignoreAdetection> __global__ void CalcMCGPU(MemStruct DeviceMem)
 
 }//end MCd
 
-__device__  void LaunchPhoton(PhotonStruct* p)
+__device__  void LaunchPhoton(LayerStruct  * Layerspecs_Ptr, 
+							  PhotonStruct* p,
+							  OutStruct    * Out_Ptr,
+							  InputStruct  * In_Ptr)
 {
 	// We are currently not using the RNG but might do later
 	//float input_fibre_radius = 0.03;//[cm]
 	//p->x=input_fibre_radius*sqrtf(rand_MWC_co(x,a));
+
+	p->dead = 0;
+	p->layer = 1;
+	p->s = 0;
+	p->sleft = 0;
 
 	p->x = 0.0f;
 	p->y = 0.0f;
@@ -524,7 +541,7 @@ __device__ unsigned int Reflect(PhotonStruct* p, int new_layer, unsigned long lo
 		p->layer = new_layer;
 		return 0u;
 	}
-
+	p->rr = r;
 }
 __device__ unsigned int PhotonSurvive(PhotonStruct* p, unsigned long long* x, unsigned int* a)
 {	//Calculate wether the photon survives (returns 1) or dies (returns 0)
@@ -1063,4 +1080,311 @@ void cCUDAMCML::InitGPUStat(){
 	m_un64NumPhoton = 0;
 	m_un64PrcsDataNum = 0;
 	cudaDeviceReset();
+}
+/***********************************************************
+*	Record the photon weight exiting the first layer(uz<0),
+*	no matter whether the layer is glass or not, to the
+*	reflection array.
+*
+*	Update the photon weight as well.
+****/
+void RecordR(double			Refl,	/* reflectance. */
+	InputStruct  *	In_Ptr,
+	PhotonStruct *	p,
+	OutStruct *	Out_Ptr)
+{
+	double x = p->x;
+	double y = p->y;
+	double dx = p->dx;
+	double dy = p->dy;
+	double dz = p->dz;
+	double t;
+	double r;
+	double r1 = In_Ptr->r;
+	double t1, t2, t3;
+	short  it, ia;	/* index to r & angle. */
+	double itd, iad;	/* LW 5/20/98. To avoid out of short range.*/
+	short  nl = In_Ptr->num_layers;
+	short	 l;
+	int	 n = Out_Ptr->p1;
+
+	r = sqrt(x*x + y*y);
+
+	if (r >= r1 && r <= (r1 + 0.1*r1))
+	{
+		if (y >= 0)
+			t1 = atan2(y, x) * 180 / PI;
+		else
+			t1 = 360 + atan2(y, x) * 180 / PI;
+
+		if (dy <= 0)
+			t2 = atan2(-dy, -dx) * 180 / PI;
+		else
+			t2 = 360 + atan2(-dy, -dx) * 180 / PI;
+
+		t3 = t2 - t1;
+		if (t3<0)
+			t = 360 + t3;
+		else
+			t = t3;
+
+		itd = (short)(t / In_Ptr->dt);
+		if (itd>In_Ptr->nr - 1) it = In_Ptr->nr - 1;
+		else it = itd;
+
+		iad = (short)(acos(-dz) * 180 / PI / In_Ptr->da);
+		if (iad>In_Ptr->na - 1) ia = In_Ptr->na - 1;
+		else ia = iad;
+
+		Out_Ptr->Rd_ra[it][ia] += p->weight*(1.0 - Refl);		/* 各天頂角・各方位角の光子ウェイトの記録 */
+		Out_Ptr->Rd_p[it][ia] += 1;							/* 各天頂角・各方位角の光子数の記録 */
+		Out_Ptr->P += p->weight*(1.0 - Refl);
+
+		for (l = 1; l <= nl; l++)
+			Out_Ptr->L[l] += Out_Ptr->OPL[l] * p->weight*(1.0 - Refl);		/* 受光エリアに入った光子の光路長の記録 */
+
+		Out_Ptr->p1 += 1;
+	}
+
+	p->weight *= Refl;
+}
+__host__ __device__ void InitOutputData(InputStruct In_Parm,
+	OutStruct * Out_Ptr)
+{
+	short nr = In_Parm.nr;
+	short na = In_Parm.na;
+	short nl = In_Parm.num_layers;
+	/* remember to use nl+2 because of 2 for ambient. */
+
+	if (nr <= 0 || na <= 0 || nl <= 0)
+		//nrerror("Wrong grid parameters.\n");
+
+	/* Init pure numbers. */
+	Out_Ptr->Rsp = 0.0;
+
+	/* Allocate the arrays and the matrices. */
+	Out_Ptr->Rd_ra = AllocMatrix(0, nr - 1, 0, na - 1);
+	Out_Ptr->Rd_p = AllocMatrix(0, nr - 1, 0, na - 1);
+
+	Out_Ptr->OPL = AllocVector(0, nl + 1);
+	Out_Ptr->L = AllocVector(0, nl + 1);
+	Out_Ptr->opl = AllocVector(0, nl + 1);
+}
+void ReportResult(InputStruct In_Parm, OutStruct Out_Parm)
+{
+	char time_report[STR_LEN];
+
+	strcpy(time_report, " Simulation time of this run.");
+	PunchTime(1, time_report);
+
+	SumScaleResult(In_Parm, &Out_Parm);
+	WriteResult(In_Parm, Out_Parm, time_report);
+}
+time_t PunchTime(char F, char *Msg)
+{
+#if GNUCC
+	return(0);
+#else
+	static clock_t ut0;	/* user time reference. */
+	static time_t  rt0;	/* real time reference. */
+	double secs;
+	char s[STR_LEN];
+
+	if (F == 0) {
+		ut0 = clock();
+		rt0 = time(NULL);
+		return(0);
+	}
+	else if (F == 1)  {
+		secs = (clock() - ut0) / (double)CLOCKS_PER_SEC;
+		if (secs<0) secs = 0;	/* clock() can overflow. */
+		sprintf(s, "User time: %8.0lf sec = %8.2lf hr.  %s\n",
+			secs, secs / 3600.0, Msg);
+		puts(s);
+		strcpy(Msg, s);
+		return(difftime(time(NULL), rt0));
+	}
+	else if (F == 2) return(difftime(time(NULL), rt0));
+	else return(0);
+#endif
+}
+void SumScaleResult(InputStruct In_Parm, OutStruct * Out_Ptr)
+{
+	CalOPL_SD(In_Parm, Out_Ptr);
+}
+void WriteResult(InputStruct In_Parm,
+	OutStruct Out_Parm,
+	char * TimeReport)
+{
+	FILE *file;
+
+	file = fopen(In_Parm.out_fname, "w");
+//	if (file == NULL) nrerror("Cannot open file to write.\n");
+
+	if (toupper(In_Parm.out_fformat) == 'A')
+		WriteVersion(file, "A1");
+	else
+		WriteVersion(file, "B1");
+
+	fprintf(file, "# %s", TimeReport);
+	fprintf(file, "\n");
+
+	WriteInParm(file, In_Parm);
+	/* reflectance, absorption, transmittance. */
+
+	/* 1D arrays. */
+
+	/* 2D arrays. */
+	WriteRd_ra(file, In_Parm.nr, In_Parm.na, Out_Parm);
+	WriteRd_p(file, In_Parm.nr, In_Parm.na, Out_Parm);
+	WriteOPL(file, In_Parm.num_layers, Out_Parm);
+
+	fclose(file);
+}
+void CalOPL_SD(InputStruct In_Parm, OutStruct * Out_Ptr)
+{
+	short l;
+	short	nl = In_Parm.num_layers;
+
+	for (l = 1; l <= nl; l++)
+		Out_Ptr->opl[l] = Out_Ptr->L[l] / Out_Ptr->P;		/* 第n層に入った光子の光路長の平均 */
+}
+
+
+double *AllocVector(short nl, short nh)
+{
+	double *v;
+	short i;
+
+	v = (double *)malloc((unsigned)(nh - nl + 1)*sizeof(double));
+//	if (!v) nrerror("allocation failure in vector()");
+
+	v -= nl;
+	for (i = nl; i <= nh; i++) v[i] = 0.0;	/* init. */
+	return v;
+}
+void WriteVersion(FILE *file, char *Version)
+{
+	fprintf(file,
+		"%s \t# Version number of the file format.\n\n",
+		Version);
+	fprintf(file, "####\n# Data categories include: \n");
+	fprintf(file, "# InParm, RAT, \n");
+	fprintf(file, "# Rd_ta, \n####\n\n");
+}
+/***********************************************************
+*	Write the input parameters to the file.
+****/
+void WriteInParm(FILE *file, InputStruct In_Parm)
+{
+	short i;
+
+	fprintf(file,
+		"InParm \t\t\t# Input parameters. cm is used.\n");
+
+	fprintf(file,
+		"%s \tA\t\t# output file name, ASCII.\n",
+		In_Parm.out_fname);
+	fprintf(file,
+		"%ld \t\t\t# No. of photons\n", In_Parm.num_photons);
+	fprintf(file,
+		"%.2lf \t\t\t# No. of SD distance\n", In_Parm.r);
+
+	fprintf(file,
+		"%G\t\t\t\t# dt [cm]\n", In_Parm.dt);
+	fprintf(file, "%hd\t%hd\t\t# No. of dt, da.\n\n",
+		In_Parm.nr, In_Parm.na);
+
+	fprintf(file,
+		"%hd\t\t\t\t\t# Number of layers\n",
+		In_Parm.num_layers);
+	fprintf(file,
+		"#n\tmua\tmus\tg\td\t# One line for each layer\n");
+	fprintf(file,
+		"%G\t\t\t\t\t# n for medium above\n",
+		In_Parm.layerspecs[0].n);
+	for (i = 1; i <= In_Parm.num_layers; i++)  {
+		LayerStruct s;
+		s = In_Parm.layerspecs[i];
+		fprintf(file, "%G\t%G\t%G\t%G\t%G\t# layer %hd\n",
+			s.n, s.mua, s.mutr, s.g, s.z_max - s.z_min, i);
+	}
+	fprintf(file, "%G\t\t\t\t\t# n for medium below\n\n",
+		In_Parm.layerspecs[i].n);
+}
+void WriteRd_ra(FILE * file,
+	short Nr,
+	short Na,
+	OutStruct Out_Parm)
+{
+	short it, ia;
+
+	fprintf(file,
+		"%s\n%s\n%s\n%s\n%s\n%s\n",	/* flag. */
+		"# Rd[theta][angle]. [1/(cm2sr)].",
+		"# Rd[0][0], [0][1],..[0][na-1]",
+		"# Rd[1][0], [1][1],..[1][na-1]",
+		"# ...",
+		"# Rd[nt-1][0], [nt-1][1],..[nt-1][na-1]",
+		"Rd_ta");
+
+	for (it = 0; it<Nr; it++)
+	{
+		for (ia = 0; ia<Na; ia++)
+		{
+			fprintf(file, "%12.4E,", Out_Parm.Rd_ra[it][ia]);
+			if ((it*Na + ia + 1) % 9 == 0) fprintf(file, "\n");
+		}
+	}
+	fprintf(file, "\n");
+}
+
+/***********************************************************
+*	1 number each line.
+****/
+
+void WriteRd_p(FILE * file,
+	short Nr,
+	short Na,
+	OutStruct Out_Parm)
+{
+	short it, ia;
+
+	fprintf(file,
+		"%s\n%s\n%s\n%s\n%s\n%s\n",	/* flag. */
+		"# Rd[theta][angle]. [1/(cm2sr)].",
+		"# Rd[0][0], [0][1],..[0][na-1]",
+		"# Rd[1][0], [1][1],..[1][na-1]",
+		"# ...",
+		"# Rd[nt-1][0], [nt-1][1],..[nt-1][na-1]",
+		"Rd_p");
+
+	for (it = 0; it<Nr; it++)
+	{
+		for (ia = 0; ia<Na; ia++)
+		{
+			fprintf(file, "%12.4E,", Out_Parm.Rd_p[it][ia]);
+			if ((it*Na + ia + 1) % 9 == 0) fprintf(file, "\n");
+		}
+	}
+	fprintf(file, "photon number");
+	fprintf(file, "%ld\n", Out_Parm.p1);
+	fprintf(file, "\n");
+}
+
+/***********************************************************
+*	1 number each line.
+****/
+void WriteOPL(FILE * file,
+	short nl,
+	OutStruct Out_Parm)
+{
+	short l;
+
+	for (l = 1; l <= nl; l++)
+	{
+		fprintf(file, "The %d layer\n", l);
+		fprintf(file, "%12.4E\n", Out_Parm.opl[l]);	/* 平均光路長の書き込み */
+		fprintf(file, "\n");
+	}
 }

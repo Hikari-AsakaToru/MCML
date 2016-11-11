@@ -51,6 +51,7 @@
 #define RPI 0.318309886f // Pi Rad
 #define MAX_LAYERS 100
 #define STR_LEN 200
+#define Boolean char
 
 //#define WEIGHT 0.0001f
 #define WEIGHTI 429497u //0xFFFFFFFFu*WEIGHT
@@ -63,8 +64,6 @@ __host__ __device__ struct MaxState{
 	int MaxRaSize;
 };
 
-
-// TYPEDEFS
 __host__ __device__ struct LayerStruct {
 	float z_min;		// Layer z_min [cm]
 	float z_max;		// Layer z_max [cm]
@@ -73,6 +72,53 @@ __host__ __device__ struct LayerStruct {
 	float g;			// Anisotropy factor [-]
 	float n;			// Refractive index [-]
 };
+__host__ __device__ struct InputStruct{
+	char	 out_fname[STR_LEN];	/* output file name. */
+	char	 out_fformat;		/* output file format. */
+	/* 'A' for ASCII, */
+	/* 'B' for binary. */
+	long	 num_photons; 		/* to be traced. */
+	double r;
+	double Wth; 				/* play roulette if photon */
+	/* weight < Wth.*/
+
+	double dt;
+	double da;				/* alpha grid separation. */
+	/* [radian] */
+	short nr;
+	short na;					/* array range 0..na-1. */
+
+	short	num_layers;			/* number of layers. */
+	LayerStruct * layerspecs;	/* layer parameters. */
+};
+__host__ __device__ struct OutStruct{
+	double    Rsp;	/* specular reflectance. [-] */
+	double ** Rd_ra;	/* 2D distribution of diffuse */
+	double ** Rd_p;
+
+	double *  OPL;	/*各光子の光路長*/
+	double *  L;		/*受光点に入った光子の光路長×フォトンウェイト*/
+	double *  opl;	/*各層の平均部分光路長*/
+	double	P;		/*受光点に*/
+
+	long	    p1;
+	/* reflectance. [1/(cm2 sr)] */
+};
+
+/***********************************************************
+*	Routine prototypes for dynamic memory allocation and
+*	release of arrays and matrices.
+*	Modified from Numerical Recipes in C.
+****/
+__host__ __device__ double  *AllocVector(short, short);
+__host__ __device__ double **AllocMatrix(short, short, short, int);
+__host__ __device__ void 	 FreeVector(double *, short, short);
+__host__ __device__ void 	 FreeMatrix(double **, short, short, short, short);
+__host__ __device__ void CalOPL_SD(InputStruct In_Parm, OutStruct * Out_Ptr);
+__host__ __device__ void PunchTime(char, char);
+
+// TYPEDEFS
+
 
 __host__ __device__ struct PhotonStruct{
 	float x;		// Global x coordinate [cm]
@@ -84,6 +130,10 @@ __host__ __device__ struct PhotonStruct{
 	unsigned long long weight;			// Photon weight
 	int layer;				// Current layer
 	unsigned long long Index;
+	Boolean dead;		/* 1 if photon is terminated. */
+	float s;			/* current step size. [cm]. sourceの46行にあるのでは*/
+	float sleft;		/* step size left. dimensionless [-]. 必要かわからない*/
+	float rr;
 	__device__ __host__ PhotonStruct& PhotonStruct::operator =(const PhotonStruct& b){
 		this->dx = b.dx;
 		this->dy = b.dy;
@@ -150,7 +200,9 @@ __host__ __device__ struct SimulationStruct{
 
 
 __host__ __device__ struct MemStruct{
-	PhotonStruct* p;					// Pointer to structure array containing all the photon data
+	PhotonStruct* p;// Pointer to structure array containing all the photon data
+	InputStruct  *	In_Ptr;
+	OutStruct *		Out_Ptr;
 	unsigned long long* x;				// Pointer to the array containing all the WMC x's
 	unsigned int* a;					// Pointer to the array containing all the WMC a's
 	unsigned int* thread_active;		// Pointer to the array containing the thread active status
@@ -160,6 +212,8 @@ __host__ __device__ struct MemStruct{
 	unsigned long long* A_rz;			// Pointer to the 2D detection matrix!
 	unsigned long long* Tt_ra;
 };
+
+
 
 
 #ifdef _NVCC_

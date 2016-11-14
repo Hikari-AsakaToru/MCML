@@ -31,7 +31,7 @@ __shared__ PhotonStruct dsh_sPhoton[NUM_THREADS_PER_BLOCK];
 //
 // MCMLåvéZÇÃñ{ëÃ
 // 
-template <int ignoreAdetection> __global__ void MCd(MemStruct DeviceMem,PhotonStruct p)
+template <int ignoreAdetection> __global__ void MCd(MemStruct DeviceMem)
 {
 	//Block index
 	int bx = blockIdx.x;
@@ -71,9 +71,9 @@ template <int ignoreAdetection> __global__ void MCd(MemStruct DeviceMem,PhotonSt
 	for (; ii<NUMSTEPS_GPU; ii++) //this is the main while loop
 	{
 		if (layers_dc[p.layer].mutr != FLT_MAX)
-			ps = -__logf(rand_MWC_oc(&x, &a))*layers_dc[p.layer].mutr;//sample step length [cm] //HERE AN OPEN_OPEN FUNCTION WOULD BE APPRECIATED
+			p.s = -__logf(rand_MWC_oc(&x, &a))*layers_dc[p.layer].mutr;//sample step length [cm] //HERE AN OPEN_OPEN FUNCTION WOULD BE APPRECIATED
 		else
-			s = 100.0f;//temporary, say the step in glass is 100 cm.
+			p.s = 100.0f;//temporary, say the step in glass is 100 cm.
 
 		//Check for layer transitions and in case, calculate s
 		new_layer = p.layer;
@@ -169,10 +169,7 @@ template <int ignoreAdetection> __global__ void MCd(MemStruct DeviceMem,PhotonSt
 
 
 }//end MCd
-template <int ignoreAdetection> __global__ void CalcMCGPU(MemStruct DeviceMem,
-														InputStruct  *	In_Ptr,
-														PhotonStruct *	p,
-														OutStruct *		Out_Ptr)
+template <int ignoreAdetection> __global__ void CalcMCGPU(MemStruct DeviceMem)
 {
 	//Block index
 	int bx = blockIdx.x;
@@ -267,7 +264,7 @@ template <int ignoreAdetection> __global__ void CalcMCGPU(MemStruct DeviceMem,
 					index = __float2int_rz(__fdividef(acosf(-dsh_sPhoton[tx].dz) , (PI / det_dc[0].na)))*det_dc[0].nr + min(__float2int_rz(__fdividef(__fsqrt_rz(dsh_sPhoton[tx].x*dsh_sPhoton[tx].x + dsh_sPhoton[tx].y*dsh_sPhoton[tx].y), det_dc[0].dr)), (int)det_dc[0].nr - 1);
 					AtomicAddULL(&DeviceMem.Rd_ra[index], dsh_sPhoton[tx].weight);
 					dsh_sPhoton[tx].weight = 0;
-					RecordR(dsh_sPhoton[tx]->rr, In_Ptr, dsh_sPhoton[tx], Out_Ptr);//rÇÇ«Ç§Ç‚Ç¡ÇƒéùÇ¡ÇƒÇ≠ÇÍÇŒÇ¢Ç¢ÇÃÇ©
+					RecordR(&dsh_sPhoton[tx]->rr, DeviceMem.In_Ptr, &dsh_sPhoton[tx], DeviceMem.Out_Ptr);//rÇÇ«Ç§Ç‚Ç¡ÇƒéùÇ¡ÇƒÇ≠ÇÍÇŒÇ¢Ç¢ÇÃÇ©
 				}
 				if (new_layer > *n_layers_dc)
 				{	//TransmittedÅ@ìßâﬂ
@@ -1088,7 +1085,7 @@ void cCUDAMCML::InitGPUStat(){
 *
 *	Update the photon weight as well.
 ****/
-void RecordR(double			Refl,	/* reflectance. */
+__host__ __device__ void RecordR(double			Refl,	/* reflectance. */
 	InputStruct  *	In_Ptr,
 	PhotonStruct *	p,
 	OutStruct *	Out_Ptr)
@@ -1180,7 +1177,7 @@ void ReportResult(InputStruct In_Parm, OutStruct Out_Parm)
 	SumScaleResult(In_Parm, &Out_Parm);
 	WriteResult(In_Parm, Out_Parm, time_report);
 }
-time_t PunchTime(char F, char *Msg)
+__host__ __device__ time_t PunchTime(char F, char *Msg)
 {
 #if GNUCC
 	return(0);
@@ -1208,7 +1205,7 @@ time_t PunchTime(char F, char *Msg)
 	else return(0);
 #endif
 }
-void SumScaleResult(InputStruct In_Parm, OutStruct * Out_Ptr)
+__host__ __device__ void SumScaleResult(InputStruct In_Parm, OutStruct * Out_Ptr)
 {
 	CalOPL_SD(In_Parm, Out_Ptr);
 }
@@ -1263,7 +1260,7 @@ double *AllocVector(short nl, short nh)
 	for (i = nl; i <= nh; i++) v[i] = 0.0;	/* init. */
 	return v;
 }
-void WriteVersion(FILE *file, char *Version)
+__host__ __device__ void WriteVersion(FILE *file, char *Version)
 {
 	fprintf(file,
 		"%s \t# Version number of the file format.\n\n",
@@ -1312,7 +1309,7 @@ void WriteInParm(FILE *file, InputStruct In_Parm)
 	fprintf(file, "%G\t\t\t\t\t# n for medium below\n\n",
 		In_Parm.layerspecs[i].n);
 }
-void WriteRd_ra(FILE * file,
+__host__ __device__ void WriteRd_ra(FILE * file,
 	short Nr,
 	short Na,
 	OutStruct Out_Parm)
@@ -1343,7 +1340,7 @@ void WriteRd_ra(FILE * file,
 *	1 number each line.
 ****/
 
-void WriteRd_p(FILE * file,
+__host__ __device__ void WriteRd_p(FILE * file,
 	short Nr,
 	short Na,
 	OutStruct Out_Parm)
@@ -1375,7 +1372,7 @@ void WriteRd_p(FILE * file,
 /***********************************************************
 *	1 number each line.
 ****/
-void WriteOPL(FILE * file,
+__host__ __device__ void WriteOPL(FILE * file,
 	short nl,
 	OutStruct Out_Parm)
 {

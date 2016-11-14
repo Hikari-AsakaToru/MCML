@@ -56,6 +56,7 @@
 //#define WEIGHT 0.0001f
 #define WEIGHTI 429497u //0xFFFFFFFFu*WEIGHT
 #define CHANCE 0.1f
+_Check_return_ _CRT_JIT_INTRINSIC _CRTIMP int __cdecl toupper(_In_ int _C);
 
 
 // 最大値用
@@ -105,17 +106,6 @@ __host__ __device__ struct OutStruct{
 	/* reflectance. [1/(cm2 sr)] */
 };
 
-/***********************************************************
-*	Routine prototypes for dynamic memory allocation and
-*	release of arrays and matrices.
-*	Modified from Numerical Recipes in C.
-****/
-__host__ __device__ double  *AllocVector(short, short);
-__host__ __device__ double **AllocMatrix(short, short, short, int);
-__host__ __device__ void 	 FreeVector(double *, short, short);
-__host__ __device__ void 	 FreeMatrix(double **, short, short, short, short);
-__host__ __device__ void CalOPL_SD(InputStruct In_Parm, OutStruct * Out_Ptr);
-__host__ __device__ void PunchTime(char, char);
 
 // TYPEDEFS
 
@@ -133,7 +123,7 @@ __host__ __device__ struct PhotonStruct{
 	Boolean dead;		/* 1 if photon is terminated. */
 	float s;			/* current step size. [cm]. sourceの46行にあるのでは*/
 	float sleft;		/* step size left. dimensionless [-]. 必要かわからない*/
-	float rr;
+	double rr;
 	__device__ __host__ PhotonStruct& PhotonStruct::operator =(const PhotonStruct& b){
 		this->dx = b.dx;
 		this->dy = b.dy;
@@ -278,3 +268,22 @@ public:
 	void FreeSimulationStruct(SimulationStruct* sim, int nRun);
 	void FreeFailedSimStrct(SimulationStruct* sim, int nRun);
 };
+/***********************************************************
+*	Routine prototypes for dynamic memory allocation and
+*	release of arrays and matrices.
+*	Modified from Numerical Recipes in C.
+****/
+__host__ __device__ double  *AllocVector(short, short);
+__host__ __device__ double **AllocMatrix(short, short, short, int);
+__host__ __device__ void 	 FreeVector(double *, short, short);
+__host__ __device__ void 	 FreeMatrix(double **, short, short, short, short);
+__host__ __device__ void CalOPL_SD(InputStruct In_Parm, OutStruct * Out_Ptr);
+__host__ __device__ time_t PunchTime(char F, char * Msg);
+__host__ __device__ void WriteResult(InputStruct In_Parm, OutStruct Out_Parm, char * TimeReport);
+__host__ __device__ void SumScaleResult(InputStruct In_Parm, OutStruct * Out_Ptr);
+__host__ __device__ void WriteInParm(FILE *file, InputStruct In_Parm);
+__host__ __device__ void WriteOPL(FILE * file, short nl, OutStruct Out_Parm);
+__host__ __device__ void WriteRd_p(FILE * file, short Nr, short Na, OutStruct Out_Parm);
+__host__ __device__ void WriteRd_ra(FILE * file, short Nr, short Na, OutStruct Out_Parm);
+__host__ __device__ void WriteVersion(FILE *file, char *Version);
+__host__ __device__ void RecordR(double	Refl, InputStruct  *In_Ptr, PhotonStruct *p, OutStruct *Out_Ptr);

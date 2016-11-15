@@ -22,7 +22,7 @@
 	#define NUM_THREADS 17920
 #endif
 
-#define NUM_THREADS_PER_BLOCK 1024 //Keep above 192 to eliminate global memory access overhead However, keep low to allow enough registers per thread
+#define NUM_THREADS_PER_BLOCK 512 //Keep above 192 to eliminate global memory access overhead However, keep low to allow enough registers per thread
 #define NUM_GRID_PER_BLOCK 20 //Keep above 192 to eliminate global memory access overhead However, keep low to allow enough registers per thread
 #define NUM_THREADS_PER_BLOCK_MAKE_RAND 64 //Keep above 192 to eliminate global memory access overhead However, keep low to allow enough registers per thread
 #define NUM_DIV_MAKE_RAND 20
@@ -42,6 +42,7 @@
 #include <cstring>
 #include <vector>
 #include <chrono>
+#include <ctype.h>
 
 
 
@@ -56,7 +57,7 @@
 //#define WEIGHT 0.0001f
 #define WEIGHTI 429497u //0xFFFFFFFFu*WEIGHT
 #define CHANCE 0.1f
-_Check_return_ _CRT_JIT_INTRINSIC _CRTIMP int __cdecl toupper(_In_ int _C);
+__host__ _Check_return_ _CRT_JIT_INTRINSIC _CRTIMP int __cdecl toupper(_In_ int _C);
 
 
 // 最大値用
@@ -110,7 +111,24 @@ __host__ __device__ struct OutStruct{
 // TYPEDEFS
 
 
-__host__ __device__ struct PhotonStruct{
+__host__ __device__ struct PhotonStruct : public PhotonStructForShared{
+
+	Boolean dead;		/* 1 if photon is terminated. */
+	float s;			/* current step size. [cm]. sourceの46行にあるのでは*/
+	float sleft;		/* step size left. dimensionless [-]. 必要かわからない*/
+	double rr;
+	__device__ __host__ PhotonStruct& PhotonStruct::operator =(const PhotonStruct& b){
+		this->dx = b.dx;
+		this->dy = b.dy;
+		this->dz = b.dz;
+		this->x = b.x;
+		this->y = b.y;
+		this->z = b.z;
+		this->layer = b.layer;
+		this->weight = b.weight;
+	}
+};
+__host__ __device__ struct PhotonStructForShared{	// MCML仕様に改造するとシェアードメモリが不足しビルドが通らないので専用の型を採用
 	float x;		// Global x coordinate [cm]
 	float y;		// Global y coordinate [cm]
 	float z;		// Global z coordinate [cm]
@@ -120,11 +138,17 @@ __host__ __device__ struct PhotonStruct{
 	unsigned long long weight;			// Photon weight
 	int layer;				// Current layer
 	unsigned long long Index;
-	Boolean dead;		/* 1 if photon is terminated. */
-	float s;			/* current step size. [cm]. sourceの46行にあるのでは*/
-	float sleft;		/* step size left. dimensionless [-]. 必要かわからない*/
-	double rr;
-	__device__ __host__ PhotonStruct& PhotonStruct::operator =(const PhotonStruct& b){
+	__device__ __host__ PhotonStructForShared& PhotonStructForShared::operator =(const PhotonStructForShared& b){
+		this->dx = b.dx;
+		this->dy = b.dy;
+		this->dz = b.dz;
+		this->x = b.x;
+		this->y = b.y;
+		this->z = b.z;
+		this->layer = b.layer;
+		this->weight = b.weight;
+	}
+	__device__ __host__ PhotonStructForShared& PhotonStructForShared::operator =(const PhotonStruct& b){
 		this->dx = b.dx;
 		this->dy = b.dy;
 		this->dz = b.dz;
@@ -279,11 +303,12 @@ __host__ __device__ void 	 FreeVector(double *, short, short);
 __host__ __device__ void 	 FreeMatrix(double **, short, short, short, short);
 __host__ __device__ void CalOPL_SD(InputStruct In_Parm, OutStruct * Out_Ptr);
 __host__ __device__ time_t PunchTime(char F, char * Msg);
-__host__ __device__ void WriteResult(InputStruct In_Parm, OutStruct Out_Parm, char * TimeReport);
+__host__ void WriteResult(InputStruct In_Parm, OutStruct Out_Parm, char * TimeReport);
 __host__ __device__ void SumScaleResult(InputStruct In_Parm, OutStruct * Out_Ptr);
-__host__ __device__ void WriteInParm(FILE *file, InputStruct In_Parm);
-__host__ __device__ void WriteOPL(FILE * file, short nl, OutStruct Out_Parm);
-__host__ __device__ void WriteRd_p(FILE * file, short Nr, short Na, OutStruct Out_Parm);
-__host__ __device__ void WriteRd_ra(FILE * file, short Nr, short Na, OutStruct Out_Parm);
-__host__ __device__ void WriteVersion(FILE *file, char *Version);
+__host__  void WriteInParm(FILE *file, InputStruct In_Parm);
+__host__  void WriteOPL(FILE * file, short nl, OutStruct Out_Parm);
+__host__  void WriteRd_p(FILE * file, short Nr, short Na, OutStruct Out_Parm);
+__host__  void WriteRd_ra(FILE * file, short Nr, short Na, OutStruct Out_Parm);
+__host__  void WriteVersion(FILE *file, char *Version);
 __host__ __device__ void RecordR(double	Refl, InputStruct  *In_Ptr, PhotonStruct *p, OutStruct *Out_Ptr);
+__host__ __device__ void RemodelRecordR( MemStruct  DeviceMem, PhotonStruct *p);

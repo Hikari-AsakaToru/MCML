@@ -264,7 +264,8 @@ template <int ignoreAdetection> __global__ void CalcMCGPU(MemStruct DeviceMem)
 					index = __float2int_rz(__fdividef(acosf(-dsh_sPhoton[tx].dz) , (PI / det_dc[0].na)))*det_dc[0].nr + min(__float2int_rz(__fdividef(__fsqrt_rz(dsh_sPhoton[tx].x*dsh_sPhoton[tx].x + dsh_sPhoton[tx].y*dsh_sPhoton[tx].y), det_dc[0].dr)), (int)det_dc[0].nr - 1);
 					AtomicAddULL(&DeviceMem.Rd_ra[index], dsh_sPhoton[tx].weight);
 					dsh_sPhoton[tx].weight = 0;
-					RecordR(&dsh_sPhoton[tx]->rr, DeviceMem.In_Ptr, &dsh_sPhoton[tx], DeviceMem.Out_Ptr);//rをどうやって持ってくればいいのか
+//					RecordR(dsh_sPhoton[tx]->rr, DeviceMem.In_Ptr, &dsh_sPhoton[tx], DeviceMem.Out_Ptr);//rをどうやって持ってくればいいのか
+					RemodelRecordR(DeviceMem, &dsh_sPhoton[tx]);//rをどうやって持ってくればいいのか
 				}
 				if (new_layer > *n_layers_dc)
 				{	//Transmitted　透過
@@ -321,14 +322,33 @@ template <int ignoreAdetection> __global__ void CalcMCGPU(MemStruct DeviceMem)
 
 }//end MCd
 
-__device__  void LaunchPhoton(LayerStruct  * Layerspecs_Ptr, 
-							  PhotonStruct* p,
-							  OutStruct    * Out_Ptr,
-							  InputStruct  * In_Ptr)
+__device__  void LaunchPhoton(LayerStruct  * Layerspecs_Ptr,
+	PhotonStruct* p,
+	OutStruct    * Out_Ptr,
+	InputStruct  * In_Ptr)
 {
 	// We are currently not using the RNG but might do later
 	//float input_fibre_radius = 0.03;//[cm]
 	//p->x=input_fibre_radius*sqrtf(rand_MWC_co(x,a));
+
+	p->dead = 0;
+	p->layer = 1;
+	p->s = 0;
+	p->sleft = 0;
+
+	p->x = 0.0f;
+	p->y = 0.0f;
+	p->z = 0.0f;
+	p->dx = 0.0f;
+	p->dy = 0.0f;
+	p->dz = 1.0f;
+
+	p->layer = 1;
+	p->weight = *start_weight_dc; //specular reflection!
+
+}
+__device__  void LaunchPhoton(PhotonStruct* p)
+{
 
 	p->dead = 0;
 	p->layer = 1;
@@ -707,7 +727,7 @@ int cCUDAMCML::DoOneSimulation(SimulationStruct* simulation)
 
 }
 int cCUDAMCML::InitMallocMem(SimulationStruct* sim){
-	unsigned char State = 0;
+	unsigned int State = 0;
 	cudaError_t tmp;
 
 	tmp = cudaMalloc((void**)&m_sDeviceMem, sizeof(MemStruct));
@@ -726,23 +746,31 @@ int cCUDAMCML::InitMallocMem(SimulationStruct* sim){
 	if (tmp != cudaSuccess) {
 		State |= 0x04;
 	}
-	tmp = cudaMalloc((void**)&m_sDeviceMem.thread_active, (NUM_THREADS)*sizeof(unsigned int));
+	tmp = cudaMalloc((void**)&m_sDeviceMem.In_Ptr, sizeof(InputStruct));
 	if (tmp != cudaSuccess) {
 		State |= 0x08;
 	}
-	tmp = cudaMalloc((void**)&m_sDeviceMem.num_terminated_photons, sizeof(unsigned int));
+	tmp = cudaMalloc((void**)&m_sDeviceMem.Out_Ptr, sizeof(OutStruct));
 	if (tmp != cudaSuccess) {
 		State |= 0x10;
+	}
+	tmp = cudaMalloc((void**)&m_sDeviceMem.thread_active, (NUM_THREADS)*sizeof(unsigned int));
+	if (tmp != cudaSuccess) {
+		State |= 0x20;
+	}
+	tmp = cudaMalloc((void**)&m_sDeviceMem.num_terminated_photons, sizeof(unsigned int));
+	if (tmp != cudaSuccess) {
+		State |= 0x40;
 	}
 	int rz_size = sim->det.nr*sim->det.nz;
 	int ra_size = sim->det.nr*sim->det.na;
 	tmp = cudaMalloc((void**)&m_sDeviceMem.A_rz, rz_size *sizeof(unsigned long long));
 	if (tmp != cudaSuccess) {
-		State |= 0x20;
+		State |= 0x80;
 	}
 	tmp = cudaMalloc((void**)&m_sDeviceMem.Rd_ra, ra_size*sizeof(unsigned long long));
 	if (tmp != cudaSuccess) {
-		State |= 0x40;
+		State |= 0x100;
 	}
 	tmp = cudaMalloc((void**)&m_sDeviceMem.Tt_ra, ra_size*sizeof(unsigned long long));
 	if (tmp != cudaSuccess) {
@@ -1085,11 +1113,11 @@ void cCUDAMCML::InitGPUStat(){
 *
 *	Update the photon weight as well.
 ****/
-__host__ __device__ void RecordR(double			Refl,	/* reflectance. */
-	InputStruct  *	In_Ptr,
-	PhotonStruct *	p,
-	OutStruct *	Out_Ptr)
+__host__ __device__ void RemodelRecordR(MemStruct  DeviceMem, PhotonStruct *p)
 {
+	InputStruct *In_Ptr		= DeviceMem.In_Ptr;
+	OutStruct	*Out_Ptr	= DeviceMem.Out_Ptr;
+	double		Refl = p->rr;
 	double x = p->x;
 	double y = p->y;
 	double dx = p->dx;
@@ -1145,6 +1173,66 @@ __host__ __device__ void RecordR(double			Refl,	/* reflectance. */
 
 	p->weight *= Refl;
 }
+//__host__ __device__ void RecordR(double			Refl,	/* reflectance. */
+//	InputStruct  *	In_Ptr,
+//	PhotonStruct *	p,
+//	OutStruct *	Out_Ptr)
+//{
+//	double x = p->x;
+//	double y = p->y;
+//	double dx = p->dx;
+//	double dy = p->dy;
+//	double dz = p->dz;
+//	double t;
+//	double r;
+//	double r1 = In_Ptr->r;
+//	double t1, t2, t3;
+//	short  it, ia;	/* index to r & angle. */
+//	double itd, iad;	/* LW 5/20/98. To avoid out of short range.*/
+//	short  nl = In_Ptr->num_layers;
+//	short	 l;
+//	int	 n = Out_Ptr->p1;
+//
+//	r = sqrt(x*x + y*y);
+//
+//	if (r >= r1 && r <= (r1 + 0.1*r1))
+//	{
+//		if (y >= 0)
+//			t1 = atan2(y, x) * 180 / PI;
+//		else
+//			t1 = 360 + atan2(y, x) * 180 / PI;
+//
+//		if (dy <= 0)
+//			t2 = atan2(-dy, -dx) * 180 / PI;
+//		else
+//			t2 = 360 + atan2(-dy, -dx) * 180 / PI;
+//
+//		t3 = t2 - t1;
+//		if (t3<0)
+//			t = 360 + t3;
+//		else
+//			t = t3;
+//
+//		itd = (short)(t / In_Ptr->dt);
+//		if (itd>In_Ptr->nr - 1) it = In_Ptr->nr - 1;
+//		else it = itd;
+//
+//		iad = (short)(acos(-dz) * 180 / PI / In_Ptr->da);
+//		if (iad>In_Ptr->na - 1) ia = In_Ptr->na - 1;
+//		else ia = iad;
+//
+//		Out_Ptr->Rd_ra[it][ia] += p->weight*(1.0 - Refl);		/* 各天頂角・各方位角の光子ウェイトの記録 */
+//		Out_Ptr->Rd_p[it][ia] += 1;							/* 各天頂角・各方位角の光子数の記録 */
+//		Out_Ptr->P += p->weight*(1.0 - Refl);
+//
+//		for (l = 1; l <= nl; l++)
+//			Out_Ptr->L[l] += Out_Ptr->OPL[l] * p->weight*(1.0 - Refl);		/* 受光エリアに入った光子の光路長の記録 */
+//
+//		Out_Ptr->p1 += 1;
+//	}
+//
+//	p->weight *= Refl;
+//}
 __host__ __device__ void InitOutputData(InputStruct In_Parm,
 	OutStruct * Out_Ptr)
 {
@@ -1209,7 +1297,7 @@ __host__ __device__ void SumScaleResult(InputStruct In_Parm, OutStruct * Out_Ptr
 {
 	CalOPL_SD(In_Parm, Out_Ptr);
 }
-void WriteResult(InputStruct In_Parm,
+__host__ void WriteResult(InputStruct In_Parm,
 	OutStruct Out_Parm,
 	char * TimeReport)
 {
@@ -1238,7 +1326,7 @@ void WriteResult(InputStruct In_Parm,
 
 	fclose(file);
 }
-void CalOPL_SD(InputStruct In_Parm, OutStruct * Out_Ptr)
+__device__ __host__ void CalOPL_SD(InputStruct In_Parm, OutStruct * Out_Ptr)
 {
 	short l;
 	short	nl = In_Parm.num_layers;
@@ -1247,8 +1335,7 @@ void CalOPL_SD(InputStruct In_Parm, OutStruct * Out_Ptr)
 		Out_Ptr->opl[l] = Out_Ptr->L[l] / Out_Ptr->P;		/* 第n層に入った光子の光路長の平均 */
 }
 
-
-double *AllocVector(short nl, short nh)
+__device__ __host__ double *AllocVector(short nl, short nh)
 {
 	double *v;
 	short i;
@@ -1260,7 +1347,7 @@ double *AllocVector(short nl, short nh)
 	for (i = nl; i <= nh; i++) v[i] = 0.0;	/* init. */
 	return v;
 }
-__host__ __device__ void WriteVersion(FILE *file, char *Version)
+__host__ void WriteVersion(FILE *file, char *Version)
 {
 	fprintf(file,
 		"%s \t# Version number of the file format.\n\n",
@@ -1309,7 +1396,7 @@ void WriteInParm(FILE *file, InputStruct In_Parm)
 	fprintf(file, "%G\t\t\t\t\t# n for medium below\n\n",
 		In_Parm.layerspecs[i].n);
 }
-__host__ __device__ void WriteRd_ra(FILE * file,
+__host__ void WriteRd_ra(FILE * file,
 	short Nr,
 	short Na,
 	OutStruct Out_Parm)
@@ -1340,7 +1427,7 @@ __host__ __device__ void WriteRd_ra(FILE * file,
 *	1 number each line.
 ****/
 
-__host__ __device__ void WriteRd_p(FILE * file,
+__host__ void WriteRd_p(FILE * file,
 	short Nr,
 	short Na,
 	OutStruct Out_Parm)
@@ -1372,7 +1459,7 @@ __host__ __device__ void WriteRd_p(FILE * file,
 /***********************************************************
 *	1 number each line.
 ****/
-__host__ __device__ void WriteOPL(FILE * file,
+__host__ void WriteOPL(FILE * file,
 	short nl,
 	OutStruct Out_Parm)
 {
@@ -1384,4 +1471,26 @@ __host__ __device__ void WriteOPL(FILE * file,
 		fprintf(file, "%12.4E\n", Out_Parm.opl[l]);	/* 平均光路長の書き込み */
 		fprintf(file, "\n");
 	}
+}
+__host__ __device__ double **AllocMatrix(short nrl, short nrh,
+	short ncl, int nch)
+{
+	long i, j;
+	double **m;
+
+	m = (double **)malloc((unsigned)(nrh - nrl + 1)
+		*sizeof(double*));
+	//if (!m) nrerror("allocation failure 1 in matrix()");
+	//m -= nrl;
+
+	for (i = nrl; i <= nrh; i++) {
+		m[i] = (double *)malloc((unsigned)(nch - ncl + 1)
+			*sizeof(double));
+		//if (!m[i]) nrerror("allocation failure 2 in matrix()");
+		//m[i] -= ncl;
+	}
+
+	for (i = nrl; i <= nrh; i++)
+		for (j = ncl; j <= nch; j++) m[i][j] = 0.0;
+	return m;
 }

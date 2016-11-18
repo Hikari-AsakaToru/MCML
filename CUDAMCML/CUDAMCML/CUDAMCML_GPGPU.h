@@ -98,6 +98,7 @@ __host__ __device__ struct OutStruct{
 	double ** Rd_ra;	/* 2D distribution of diffuse */
 	double ** Rd_p;
 
+
 	double *  OPL;	/*各光子の光路長*/
 	double *  L;		/*受光点に入った光子の光路長×フォトンウェイト*/
 	double *  opl;	/*各層の平均部分光路長*/
@@ -111,11 +112,21 @@ __host__ __device__ struct OutStruct{
 // TYPEDEFS
 
 
-__host__ __device__ struct PhotonStruct : public PhotonStructForShared{
+__host__ __device__ struct PhotonStruct{
+	float x;		// Global x coordinate [cm]
+	float y;		// Global y coordinate [cm]
+	float z;		// Global z coordinate [cm]
+	float dx;		// (Global, normalized) x-direction
+	float dy;		// (Global, normalized) y-direction
+	float dz;		// (Global, normalized) z-direction
+	unsigned long long weight;			// Photon weight
+	int layer;				// Current layer
+	unsigned long long Index;
 
 	Boolean dead;		/* 1 if photon is terminated. */
 	float s;			/* current step size. [cm]. sourceの46行にあるのでは*/
 	float sleft;		/* step size left. dimensionless [-]. 必要かわからない*/
+
 	double rr;
 	__device__ __host__ PhotonStruct& PhotonStruct::operator =(const PhotonStruct& b){
 		this->dx = b.dx;
@@ -248,6 +259,7 @@ protected:
 	SimulationStruct* m_simulations;
 	MemStruct m_sDeviceMem;
 	MemStruct m_sHostMem;
+	OutStruct m_Out;
 	unsigned int m_nRunCount;
 	int m_ProcessTime;
 	// 計算するフォトン数
@@ -303,12 +315,12 @@ __host__ __device__ void 	 FreeVector(double *, short, short);
 __host__ __device__ void 	 FreeMatrix(double **, short, short, short, short);
 __host__ __device__ void CalOPL_SD(InputStruct In_Parm, OutStruct * Out_Ptr);
 __host__ __device__ time_t PunchTime(char F, char * Msg);
-__host__ void WriteResult(InputStruct In_Parm, OutStruct Out_Parm, char * TimeReport);
+__host__ __device__ void WriteResult(InputStruct In_Parm, OutStruct Out_Parm, char * TimeReport);
 __host__ __device__ void SumScaleResult(InputStruct In_Parm, OutStruct * Out_Ptr);
-__host__  void WriteInParm(FILE *file, InputStruct In_Parm);
-__host__  void WriteOPL(FILE * file, short nl, OutStruct Out_Parm);
-__host__  void WriteRd_p(FILE * file, short Nr, short Na, OutStruct Out_Parm);
-__host__  void WriteRd_ra(FILE * file, short Nr, short Na, OutStruct Out_Parm);
-__host__  void WriteVersion(FILE *file, char *Version);
+__host__ __device__ void WriteInParm(FILE *file, InputStruct In_Parm);
+__host__ __device__ void WriteOPL(FILE * file, short nl, OutStruct Out_Parm);
+__host__ __device__ void WriteRd_p(FILE * file, short Nr, short Na, OutStruct Out_Parm);
+__host__ __device__ void WriteRd_ra(FILE * file, short Nr, short Na, OutStruct Out_Parm);
+__host__ __device__ void WriteVersion(FILE *file, char *Version);
 __host__ __device__ void RecordR(double	Refl, InputStruct  *In_Ptr, PhotonStruct *p, OutStruct *Out_Ptr);
-__host__ __device__ void RemodelRecordR( MemStruct  DeviceMem, PhotonStruct *p);
+__host__ __device__ void RemodelRecordR(MemStruct  DeviceMem, PhotonStruct *p);

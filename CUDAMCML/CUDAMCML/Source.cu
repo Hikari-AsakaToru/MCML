@@ -774,9 +774,16 @@ int cCUDAMCML::InitMallocMem(SimulationStruct* sim){
 	}
 	tmp = cudaMalloc((void**)&m_sDeviceMem.Tt_ra, ra_size*sizeof(unsigned long long));
 	if (tmp != cudaSuccess) {
-		State |= 0x80;
+		State |= 0x200;
 	}
-
+	tmp = cudaMalloc((void**)&m_Out.Rd_ra, ra_size*sizeof(double));
+	if (tmp != cudaSuccess) {
+		State |= 0x400;
+	}
+	tmp = cudaMalloc((void**)&m_Out.Rd_p, ra_size*sizeof(double));
+	if (tmp != cudaSuccess) {
+		State |= 0x800;
+	}
 
 	// Allocate p on the device!!
 	// Allocate A_rz on host and device
@@ -809,8 +816,27 @@ int cCUDAMCML::InitMallocMem(SimulationStruct* sim){
 		State |= 0x00100000;
 	}
 	*m_sHostMem.num_terminated_photons = 0;
-
-
+	
+	m_sHostMem.Out_Ptr->Rd_ra = new double*[ra_size];
+	if (m_sHostMem.Out_Ptr->Rd_ra == NULL){
+		State |= 0x00200000;
+	}
+	m_sHostMem.Out_Ptr->Rd_p = new double*[ra_size];
+	if (m_sHostMem.Out_Ptr->Rd_p == NULL){
+		State |= 0x00200000;
+	}
+	m_Out.OPL = new double,sizeof(double);
+	if (m_Out.OPL == NULL){
+		State |= 0x00400000;
+	}
+	m_sHostMem.Out_Ptr->L = new double ,sizeof(double);
+	if (m_Out.L == NULL){
+		State |= 0x00800000;
+	}
+	m_sHostMem.Out_Ptr->opl = new double ,sizeof (double);
+	if (m_sHostMem.Out_Ptr->Rd_p == NULL){
+		State |= 0x01000000;
+	}
 
 
 	return State;
@@ -893,6 +919,8 @@ int cCUDAMCML::InitDCMem(SimulationStruct* sim)
 	if (tmp != cudaSuccess) {
 		State |= 0x20;
 	}
+	
+
 
 	return State;
 
@@ -1132,6 +1160,7 @@ __host__ __device__ void RemodelRecordR(MemStruct  DeviceMem, PhotonStruct *p)
 	short  nl = In_Ptr->num_layers;
 	short	 l;
 	int	 n = Out_Ptr->p1;
+	int id;
 
 	r = sqrt(x*x + y*y);
 
@@ -1161,7 +1190,7 @@ __host__ __device__ void RemodelRecordR(MemStruct  DeviceMem, PhotonStruct *p)
 		if (iad>In_Ptr->na - 1) ia = In_Ptr->na - 1;
 		else ia = iad;
 
-		Out_Ptr->Rd_ra[it][ia] += p->weight*(1.0 - Refl);		/* 各天頂角・各方位角の光子ウェイトの記録 */
+		Out_Ptr->Rd_ra[In_Ptr->nr*ia+it] += p->weight*(1.0 - Refl);		/* 各天頂角・各方位角の光子ウェイトの記録 */
 		Out_Ptr->Rd_p[it][ia] += 1;							/* 各天頂角・各方位角の光子数の記録 */
 		Out_Ptr->P += p->weight*(1.0 - Refl);
 
@@ -1233,7 +1262,7 @@ __host__ __device__ void RemodelRecordR(MemStruct  DeviceMem, PhotonStruct *p)
 //
 //	p->weight *= Refl;
 //}
-__host__ __device__ void InitOutputData(InputStruct In_Parm,
+__host__ __device__ void InitOutputData(MemStruct deviceMem, InputStruct In_Parm,
 	OutStruct * Out_Ptr)
 {
 	short nr = In_Parm.nr;
@@ -1472,8 +1501,7 @@ __host__ void WriteOPL(FILE * file,
 		fprintf(file, "\n");
 	}
 }
-__host__ __device__ double **AllocMatrix(short nrl, short nrh,
-	short ncl, int nch)
+__host__ __device__ double **AllocMatrix(short nrl, short nrh,short ncl, int nch)
 {
 	long i, j;
 	double **m;
@@ -1484,8 +1512,7 @@ __host__ __device__ double **AllocMatrix(short nrl, short nrh,
 	//m -= nrl;
 
 	for (i = nrl; i <= nrh; i++) {
-		m[i] = (double *)malloc((unsigned)(nch - ncl + 1)
-			*sizeof(double));
+		m[i] = (double *)malloc((unsigned)(nch - ncl + 1)*sizeof(double));
 		//if (!m[i]) nrerror("allocation failure 2 in matrix()");
 		//m[i] -= ncl;
 	}

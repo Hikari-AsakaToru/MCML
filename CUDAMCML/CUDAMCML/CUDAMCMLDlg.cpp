@@ -564,12 +564,7 @@ int cMCML::InitRNG(	const unsigned long long n_rng, CString *safeprimes_file, un
 
 	return 0;
 }
-cMCML::~cMCML()
-{
 
-	//FreeSimulationStruct(m_simulations, m_un64UsedNumData);
-	return ;
-}
 CString cMCML::StartSim(CString* chPathName, int nPathName, CString* cstrB32Name, int B32NameLeng,unsigned int Seed)
 {
 	int i;

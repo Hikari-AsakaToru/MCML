@@ -57,7 +57,7 @@
 //#define WEIGHT 0.0001f
 #define WEIGHTI 429497u //0xFFFFFFFFu*WEIGHT
 #define CHANCE 0.1f
-__host__ _Check_return_ _CRT_JIT_INTRINSIC _CRTIMP int __cdecl toupper(_In_ int _C);
+//__host__ _Check_return_ _CRT_JIT_INTRINSIC _CRTIMP int __cdecl toupper(_In_ int _C);
 
 
 // 最大値用
@@ -95,8 +95,8 @@ __host__ __device__ struct InputStruct{
 };
 __host__ __device__ struct OutStruct{
 	double    Rsp;	/* specular reflectance. [-] */
-	double ** Rd_ra;	/* 2D distribution of diffuse */
-	double ** Rd_p;
+	double * Rd_ra;	/* 2D distribution of diffuse */
+	double * Rd_p;
 
 
 	double *  OPL;	/*各光子の光路長*/
@@ -309,18 +309,20 @@ public:
 *	release of arrays and matrices.
 *	Modified from Numerical Recipes in C.
 ****/
-__host__ __device__ double  *AllocVector(short, short);
-__host__ __device__ double **AllocMatrix(short, short, short, int);
-__host__ __device__ void 	 FreeVector(double *, short, short);
-__host__ __device__ void 	 FreeMatrix(double **, short, short, short, short);
-__host__ __device__ void CalOPL_SD(InputStruct In_Parm, OutStruct * Out_Ptr);
-__host__ __device__ time_t PunchTime(char F, char * Msg);
-__host__ __device__ void WriteResult(InputStruct In_Parm, OutStruct Out_Parm, char * TimeReport);
-__host__ __device__ void SumScaleResult(InputStruct In_Parm, OutStruct * Out_Ptr);
-__host__ __device__ void WriteInParm(FILE *file, InputStruct In_Parm);
-__host__ __device__ void WriteOPL(FILE * file, short nl, OutStruct Out_Parm);
-__host__ __device__ void WriteRd_p(FILE * file, short Nr, short Na, OutStruct Out_Parm);
-__host__ __device__ void WriteRd_ra(FILE * file, short Nr, short Na, OutStruct Out_Parm);
-__host__ __device__ void WriteVersion(FILE *file, char *Version);
-__host__ __device__ void RecordR(double	Refl, InputStruct  *In_Ptr, PhotonStruct *p, OutStruct *Out_Ptr);
-__host__ __device__ void RemodelRecordR(MemStruct  DeviceMem, PhotonStruct *p);
+extern "C"{
+	__host__ __device__ double  *AllocVector(short, short);
+	__host__ __device__ double *AllocMatrix(short, short, short, int);
+	__host__ __device__ void 	 FreeVector(double *, short, short);
+	__host__ __device__ void 	 FreeMatrix(double **, short, short, short, short);
+	__host__ __device__ void CalOPL_SD(InputStruct In_Parm, OutStruct * Out_Ptr);
+	__host__ __device__ time_t PunchTime(char F, char * Msg);
+	__host__ __device__ void WriteResult(InputStruct In_Parm, OutStruct Out_Parm, char * TimeReport);
+	__host__ __device__ void SumScaleResult(InputStruct In_Parm, OutStruct * Out_Ptr);
+	__host__ __device__ void WriteInParm(FILE *file, InputStruct In_Parm);
+	__host__ __device__ void WriteOPL(FILE * file, short nl, OutStruct Out_Parm);
+	__host__ __device__ void WriteRd_p(FILE * file, short Nr, short Na, OutStruct Out_Parm);
+	__host__ __device__ void WriteRd_ra(FILE * file, short Nr, short Na, OutStruct Out_Parm);
+	__host__ __device__ void WriteVersion(FILE *file, char *Version);
+	__host__ __device__ void RecordR(double	Refl, InputStruct  *In_Ptr, PhotonStruct *p, OutStruct *Out_Ptr);
+	__host__ __device__ void RemodelRecordR(MemStruct  DeviceMem, PhotonStruct *p);
+}

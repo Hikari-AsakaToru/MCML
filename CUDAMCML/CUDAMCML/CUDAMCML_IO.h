@@ -196,6 +196,5 @@ class cMCML :public cCUDAMCML{
 
 public:
 	void InitIO();
-	~cMCML();
 	CString StartSim(CString* chPathName, int nPathName, CString* cstrB32Name, int B32NameLeng,unsigned int Seed);
 };

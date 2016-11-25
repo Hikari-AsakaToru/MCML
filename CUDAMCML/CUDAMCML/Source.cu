@@ -746,14 +746,6 @@ int cCUDAMCML::InitMallocMem(SimulationStruct* sim){
 	if (tmp != cudaSuccess) {
 		State |= 0x04;
 	}
-	tmp = cudaMalloc((void**)&m_sDeviceMem.In_Ptr, sizeof(InputStruct));
-	if (tmp != cudaSuccess) {
-		State |= 0x08;
-	}
-	tmp = cudaMalloc((void**)&m_sDeviceMem.Out_Ptr, sizeof(OutStruct));
-	if (tmp != cudaSuccess) {
-		State |= 0x10;
-	}
 	tmp = cudaMalloc((void**)&m_sDeviceMem.thread_active, (NUM_THREADS)*sizeof(unsigned int));
 	if (tmp != cudaSuccess) {
 		State |= 0x20;
@@ -776,22 +768,100 @@ int cCUDAMCML::InitMallocMem(SimulationStruct* sim){
 	if (tmp != cudaSuccess) {
 		State |= 0x200;
 	}
-	tmp = cudaMalloc((void**)&m_Out.Rd_ra, ra_size*sizeof(double));
+	tmp = cudaMalloc((void**)&m_sDeviceMem.In_Ptr, sizeof(InputStruct));
 	if (tmp != cudaSuccess) {
-		State |= 0x400;
+		State |= 0x08;
 	}
-	tmp = cudaMalloc((void**)&m_Out.Rd_p, ra_size*sizeof(double));
+	tmp = cudaMalloc((void**)&m_sDeviceMem.Out_Ptr, sizeof(OutStruct));
 	if (tmp != cudaSuccess) {
-		State |= 0x800;
+		State |= 0x10;
 	}
+	/*
+	この時点ではm_sDeviceMem.Out_Ptrにはdevice上で確保したメモリの位置(アドレス)がHostメモリ上に保存されている
+	例: Out_Ptr が deviceメモリの2番目を先頭として確保し，そのdevice上のアドレスをHostメモリの5番目に保存した場合
+					 1  2  3  4  5
+	Hostのメモリ	[0][0][0][0][2]			
+	Dev のメモリ	[0][d      ][0]			[d]・・・Out_Ptrが確保した場所(dataのd) こんな感じ
+	
+	この状態で	tmp = cudaMalloc((void**)&m_sDeviceMem.Out_Ptr->Rd_ra, 8);　を実行するとどうなるか？
+	そもそも　m_sDeviceMem.Out_Ptr->Rd_ra　はどのような意味を持つかというと　m_sDeviceMem.Out_Ptrを基準にして相対的にRd_raのメモリの位置を示している
+	上図で言えば[d]で確保している2~4番目の3つ分の位置を示すことができる．
+
+	だがここに落とし穴がある．m_sDeviceMem.Out_Ptr->Rd_raを実際に求めるのはCPU，つまりHostメモリ上で考えられてしまう
+	そのため m_sDeviceMem.Out_Ptr->Rd_ra　は上図で言えばHost側メモリの 2番目を参照してしまう．当然そこには何もないのでエラーが起きてしまう
+
+
+	CPU「ちょっとまって！2番目のメモリ付近確保してないやん！」⇒　エラー発生
+						_________
+					   ↓		 |
+					 1  2  3  4  5
+	Hostのメモリ	[0][0][0][0][2]
+	Dev のメモリ	[0][d      ][0]			[d]・・・Out_Ptrが確保した場所(dataのd) こんな感じ
+
+	・対処方法は構造体をHost側で仮確保⇒Deviceに転送すれば良い
+	例えば適当なHostの場所に構造体を用意し
+		OutStruct TmpOutStruct;
+		tmp = cudaMalloc((void**)&TmpOutStruct.Rd_ra, 1);
+		tmp = cudaMalloc((void**)&TmpOutStruct.L, 1);
+		tmp = cudaMalloc((void**)&TmpOutStruct.OP, 1);
+	このようにすると下の図のようになる．
+
+					 1  2  3  4  5  6   7  8
+	Hostのメモリ    [6  7  8][0][2]						[6 7 8]	・・・TmpOutStructの中身(deviceの場所)
+	Dev のメモリ	[0][d      ][0][Rd][L][OP]			[d]		・・・Out_Ptrが確保した場所(dataのd) こんな感じ
+
+	このあとにcudaMemcpy(m_sDeviceMem.Out_Ptr, &TmpOutStruct,sizeof(OutStruct), cudaMemcpyHostToDevice);を行うことで
+	m_sDeviceMem.Out_Ptrの中身が確保できる．
+
+					 1  2  3  4  5  6   7  8
+	Hostのメモリ    [6  7  8][0][2]						[6 7 8]	・・・TmpOutStructの中身(deviceの場所)
+	Dev のメモリ	[0][6  7  8][0][Rd][L][OP]			[d]		・・・Out_Ptrが確保した場所(dataのd) こんな感じ
+
+	ソースは2ch(http://toro.2ch.net/test/read.cgi/tech/1314104886/)[108~111参照]
+	*/
+	
+	tmp = cudaMalloc((void**)&m_sOutStruct.Rd_ra, ra_size*sizeof(double));
+
+	
+	tmp = cudaMalloc((void**)&m_sOutStruct.Rd_p, ra_size*sizeof(double));
+//	if (tmp != cudaSuccess) {
+//		State |= 0x800;
+//	}
+	tmp = cudaMalloc((void**)&m_sOutStruct.P, sizeof(double));
+//	if (tmp != cudaSuccess) {
+//		State |= 0x1000;
+//	}
+	tmp = cudaMalloc((void**)&m_sOutStruct.p1, sizeof(double));
+	//	if (tmp != cudaSuccess) {
+//		State |= 0x2000;
+//	}
+	tmp = cudaMalloc((void**)&m_sOutStruct.Rsp, sizeof(double));
+	//	if (tmp != cudaSuccess) {
+//		State |= 0x4000;
+//	}
+	tmp = cudaMalloc((void**)&m_sOutStruct.L, sizeof(double));
+	//	if (tmp != cudaSuccess) {
+//		State |= 0x8000;
+//	}
+	tmp = cudaMalloc((void**)&m_sOutStruct.OPL, sizeof(double));
+	
+	
+	//	if (tmp != cudaSuccess) {
+//		State |= 0x10000;
+//	}
+	tmp = cudaMalloc((void**)&m_sOutStruct.opl, sizeof(double));
+//	if (tmp != cudaSuccess) {
+//		State |= 0x20000;
+//	}
+	cudaMemcpy(m_sDeviceMem.Out_Ptr, &m_sOutStruct, sizeof(OutStruct), cudaMemcpyHostToDevice);
 
 	// Allocate p on the device!!
 	// Allocate A_rz on host and device
 	m_sHostMem.p = new PhotonStruct			[NUM_THREADS];
 	m_sHostMem.x = new unsigned long long	[NUM_THREADS];
 	m_sHostMem.a = new unsigned int			[NUM_THREADS];
-	if ((m_sHostMem.x != NULL) && (m_sHostMem.a != NULL)){
-		State |= 0x00200000;
+	if ((m_sHostMem.x == NULL) || (m_sHostMem.a == NULL)){
+		State |= 0x00008000;
 	}
 	m_sHostMem.A_rz = new unsigned long long [rz_size];
 	if (m_sHostMem.A_rz == NULL){
@@ -817,29 +887,35 @@ int cCUDAMCML::InitMallocMem(SimulationStruct* sim){
 	}
 	*m_sHostMem.num_terminated_photons = 0;
 
-	m_sHostMem.Out_Ptr->Rd_ra = new double[ra_size];
-	if (m_sHostMem.Out_Ptr->Rd_ra == NULL){
+	m_sHostMem.Out_Ptr = new OutStruct[1];
+	if (m_sHostMem.Out_Ptr == NULL){
 		State |= 0x00200000;
 	}
-	m_sHostMem.Out_Ptr->Rd_p = new double[rz_size];
-	if (m_sHostMem.Out_Ptr->Rd_p == NULL){
+	m_sHostMem.Out_Ptr->Rd_ra = new double[ra_size];
+	if (m_sHostMem.Out_Ptr->Rd_ra == NULL){
 		State |= 0x00400000;
 	}
-	m_Out.OPL = new double,sizeof(double);
-	if (m_Out.OPL == NULL){
+
+	m_sHostMem.Out_Ptr->Rd_p = new double[ra_size];
+	if (m_sHostMem.Out_Ptr->Rd_p == NULL){
 		State |= 0x00800000;
 	}
-	m_sHostMem.Out_Ptr->L = new double ,sizeof(double);
-	if (m_Out.L == NULL){
+	m_sHostMem.Out_Ptr->OPL = new double, sizeof(double);
+	if (m_sHostMem.Out_Ptr->OPL == NULL){
 		State |= 0x001000000;
+	}
+	m_sHostMem.Out_Ptr->L = new double ,sizeof(double);
+	if (m_sHostMem.Out_Ptr->L == NULL){
+		State |= 0x0020000000;
 	}
 	m_sHostMem.Out_Ptr->opl = new double ,sizeof (double);
 	if (m_sHostMem.Out_Ptr->Rd_p == NULL){
-		State |= 0x02000000;
+		State |= 0x0040000000;
 	}
+	
+	
 
-
-	return State;
+	return State ;
 }
 void cCUDAMCML::CopyDeviceToHostMem(MemStruct* HostMem, MemStruct* DeviceMem, SimulationStruct* sim)
 { //Copy data from Device to Host memory
@@ -851,6 +927,10 @@ void cCUDAMCML::CopyDeviceToHostMem(MemStruct* HostMem, MemStruct* DeviceMem, Si
 	cudaMemcpy(HostMem->A_rz, DeviceMem->A_rz, rz_size*sizeof(unsigned long long), cudaMemcpyDeviceToHost);
 	cudaMemcpy(HostMem->Rd_ra, DeviceMem->Rd_ra, ra_size*sizeof(unsigned long long), cudaMemcpyDeviceToHost);
 	cudaMemcpy(HostMem->Tt_ra, DeviceMem->Tt_ra, ra_size*sizeof(unsigned long long), cudaMemcpyDeviceToHost);
+
+	
+	cudaMemcpy(HostMem->Out_Ptr->Rd_ra,m_sOutStruct.Rd_ra, ra_size*sizeof(double), cudaMemcpyDeviceToHost);
+	cudaMemcpy(HostMem->Out_Ptr->Rd_p, m_sOutStruct.Rd_p, ra_size*sizeof(double), cudaMemcpyDeviceToHost);
 
 	//Also copy the state of the RNG's
 	cudaMemcpy(HostMem->p, DeviceMem->p, NUM_THREADS *sizeof(PhotonStruct), cudaMemcpyDeviceToHost);
@@ -878,6 +958,18 @@ int cCUDAMCML::CopyHostToDeviceMem(MemStruct* HostMem, MemStruct* DeviceMem, Sim
 	tmp = cudaMemcpy(DeviceMem->num_terminated_photons, HostMem->num_terminated_photons, sizeof(unsigned int), cudaMemcpyHostToDevice);
 	if (tmp != cudaSuccess) {
 		State |= 0x800;
+	}
+	tmp = cudaMemcpy(DeviceMem->Out_Ptr->OPL, HostMem->Out_Ptr->OPL, sizeof(double), cudaMemcpyHostToDevice);
+	if (tmp != cudaSuccess) {
+		State |= 0x1000;
+	}
+	tmp = cudaMemcpy(DeviceMem->Out_Ptr->opl, HostMem->Out_Ptr->opl, sizeof(double), cudaMemcpyHostToDevice);
+	if (tmp != cudaSuccess) {
+		State |= 0x2000;
+	}
+	tmp = cudaMemcpy(DeviceMem->Out_Ptr->L, HostMem->Out_Ptr->L, sizeof(double), cudaMemcpyHostToDevice);
+	if (tmp != cudaSuccess) {
+		State |= 0x4000;
 	}
 	return State;
 }
@@ -1035,20 +1127,20 @@ int cCUDAMCML::InitContentsMem(SimulationStruct* sim)
 	HostMem->p->weight = 0;
 	HostMem->p->layer = 0;
 
-	tmp = cudaMemset(DeviceMem->p, 0, NUM_THREADS *sizeof(PhotonStruct));
+	tmp = cudaMemset(DeviceMem->p, 0, NUM_THREADS *sizeof(int));
 	if (tmp != cudaSuccess) {
-		State |= 0x20;
+		State |= 0x40;
 	}
 
 	tmp = cudaMemcpy(DeviceMem->x, HostMem->x, NUM_THREADS *sizeof(unsigned long long), cudaMemcpyHostToDevice);
 	if (tmp != cudaSuccess) {
-		State |= 0x40;
+		State |= 0x80;
 	}
 
 
 	tmp = cudaMemcpy(DeviceMem->a, HostMem->a, NUM_THREADS*sizeof(unsigned int), cudaMemcpyHostToDevice);
 	if (tmp != cudaSuccess) {
-		State |= 0x80;
+		State |= 0x100;
 	}
 
 	for (int i = 0; i < sim->number_of_photons; i++){
@@ -1066,7 +1158,7 @@ int cCUDAMCML::InitContentsMem(SimulationStruct* sim)
 
 	tmp = cudaMemcpy(DeviceMem->num_terminated_photons, HostMem->num_terminated_photons, sizeof(unsigned int), cudaMemcpyHostToDevice);
 	if (tmp != cudaSuccess) {
-		State |= 0x800;
+		State |= 0x400;
 	}
 
 	return State;
@@ -1083,7 +1175,12 @@ void cCUDAMCML::FreeMemStructs(MemStruct* HostMem, MemStruct* DeviceMem)
 	cudaFree(DeviceMem->A_rz);
 	cudaFree(DeviceMem->Rd_ra);
 	cudaFree(DeviceMem->Tt_ra);
-	cudaFree(DeviceMem);
+	cudaFree(m_sOutStruct.Rd_p);
+	cudaFree(m_sOutStruct.Rd_ra);
+	cudaFree(m_sOutStruct.L);
+	cudaFree(m_sOutStruct.OPL);
+	cudaFree(m_sOutStruct.opl);
+	
 	delete[] HostMem->p;
 	delete[] HostMem->x;
 	delete[] HostMem->a;
@@ -1093,8 +1190,11 @@ void cCUDAMCML::FreeMemStructs(MemStruct* HostMem, MemStruct* DeviceMem)
 	delete[] HostMem->A_rz;
 	delete[] HostMem->Rd_ra;
 	delete[] HostMem->Tt_ra;
-
-
+	delete[] HostMem->Out_Ptr->Rd_ra;
+	delete[] HostMem->Out_Ptr->Rd_p;
+	delete[] HostMem->Out_Ptr->L;
+	delete[] HostMem->Out_Ptr->OPL;
+	delete[] HostMem->Out_Ptr->opl;
 }
 
 void cCUDAMCML::FreeSimulationStruct(SimulationStruct* sim, int nRun)

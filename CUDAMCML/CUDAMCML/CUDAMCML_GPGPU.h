@@ -94,7 +94,6 @@ __host__ __device__ struct InputStruct{
 	LayerStruct * layerspecs;	/* layer parameters. */
 };
 __host__ __device__ struct OutStruct{
-	double    Rsp;	/* specular reflectance. [-] */
 	double * Rd_ra;	/* 2D distribution of diffuse */
 	double * Rd_p;
 
@@ -103,8 +102,9 @@ __host__ __device__ struct OutStruct{
 	double *  L;		/*受光点に入った光子の光路長×フォトンウェイト*/
 	double *  opl;	/*各層の平均部分光路長*/
 	double	P;		/*受光点に*/
+	double    Rsp;	/* specular reflectance. [-] */
 
-	long	    p1;
+	unsigned long long	    p1;
 	/* reflectance. [1/(cm2 sr)] */
 };
 
@@ -227,7 +227,8 @@ __host__ __device__ struct SimulationStruct{
 __host__ __device__ struct MemStruct{
 	PhotonStruct* p;// Pointer to structure array containing all the photon data
 	InputStruct  *	In_Ptr;
-	OutStruct *		Out_Ptr;
+	OutStruct *	Out_Ptr;
+
 	unsigned long long* x;				// Pointer to the array containing all the WMC x's
 	unsigned int* a;					// Pointer to the array containing all the WMC a's
 	unsigned int* thread_active;		// Pointer to the array containing the thread active status
@@ -259,7 +260,7 @@ protected:
 	SimulationStruct* m_simulations;
 	MemStruct m_sDeviceMem;
 	MemStruct m_sHostMem;
-	OutStruct m_Out;
+	OutStruct m_sOutStruct;
 	unsigned int m_nRunCount;
 	int m_ProcessTime;
 	// 計算するフォトン数

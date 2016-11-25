@@ -768,10 +768,7 @@ int cCUDAMCML::InitMallocMem(SimulationStruct* sim){
 	if (tmp != cudaSuccess) {
 		State |= 0x200;
 	}
-	tmp = cudaMalloc((void**)&m_sDeviceMem.In_Ptr, sizeof(InputStruct));
-	if (tmp != cudaSuccess) {
-		State |= 0x08;
-	}
+
 	tmp = cudaMalloc((void**)&m_sDeviceMem.Out_Ptr, sizeof(OutStruct));
 	if (tmp != cudaSuccess) {
 		State |= 0x10;
@@ -891,6 +888,7 @@ int cCUDAMCML::InitMallocMem(SimulationStruct* sim){
 	if (m_sHostMem.Out_Ptr == NULL){
 		State |= 0x00200000;
 	}
+
 	m_sHostMem.Out_Ptr->Rd_ra = new double[ra_size];
 	if (m_sHostMem.Out_Ptr->Rd_ra == NULL){
 		State |= 0x00400000;

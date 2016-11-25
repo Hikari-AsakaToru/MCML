@@ -107,11 +107,6 @@ __host__ __device__ struct OutStruct{
 	unsigned long long	    p1;
 	/* reflectance. [1/(cm2 sr)] */
 };
-
-
-// TYPEDEFS
-
-
 __host__ __device__ struct PhotonStruct{
 	float x;		// Global x coordinate [cm]
 	float y;		// Global y coordinate [cm]
@@ -191,8 +186,6 @@ __host__ __device__ struct PhotonStructAoS{
 		this->weight = b.weight;
 	}
 };
-
-
 __host__ __device__ struct DetStruct{
 	float dr;		// Detection grid resolution, r-direction [cm]
 	float dz;		// Detection grid resolution, z-direction [cm]
@@ -208,6 +201,7 @@ __host__ __device__ struct RecStruct{
 };
 
 __host__ __device__ struct SimulationStruct{
+//	InputStruct  	In_Ptr;
 	unsigned long long number_of_photons;
 	int ignoreAdetection;
 	unsigned int n_layers;
@@ -226,7 +220,6 @@ __host__ __device__ struct SimulationStruct{
 
 __host__ __device__ struct MemStruct{
 	PhotonStruct* p;// Pointer to structure array containing all the photon data
-	InputStruct  *	In_Ptr;
 	OutStruct *	Out_Ptr;
 
 	unsigned long long* x;				// Pointer to the array containing all the WMC x's

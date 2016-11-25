@@ -343,7 +343,19 @@ int cMCML::WriteSimRslts(MemStruct* HostMem, SimulationStruct* sim)
 		}
 		cOutputFile.WriteString(_T("\n"));
 	}
-	cOutputFile.WriteString(_T("StartWeight \n"));
+	// Rd_ra
+
+	for (int it = 0; it < HostMem->In_Ptr->nr; it++)
+	{
+		for (int ia = 0; ia < HostMem->In_Ptr->na; ia++)
+		{
+			TransCstr.Format(_T("%12.4E,"), HostMem->Out_Ptr->Rd_ra[it + sim->det.nr*ia]);
+			cOutputFile.WriteString(TransCstr);
+			if ((it*HostMem->In_Ptr->na + ia + 1) % 9 == 0) cOutputFile.WriteString(_T("\n"));
+		}
+	}
+
+	cOutputFile.WriteString(_T("\nStartWeight \n"));
 	TransCstr.Format(_T("%21u"), sim->start_weight);
 	cOutputFile.WriteString(TransCstr + _T(",\t"));
 
@@ -393,7 +405,7 @@ CString cMCML::ReadSimData(CString* filename, SimulationStruct** simulations, in
 	for (int nLoop = 0; nLoop < m_nRunCount; nLoop++){
 
 		cInputFileIO.ReadFile1CStr	( &m_cstrOutputName);
-		cInputFileIO.ReadFile1UInt64( &(*simulations)[nLoop].number_of_photons);
+		cInputFileIO.ReadFile1UInt64( &(*simulations)[nLoop].In_Ptr.number_of_photons);
 		cInputFileIO.ReadFile1Flt	( &(*simulations)[nLoop].det.dz);
 		cInputFileIO.ReadFile1Flt	( &(*simulations)[nLoop].det.dr);
 		cInputFileIO.ReadFile1UInt	( &(*simulations)[nLoop].det.nz);

@@ -47,7 +47,7 @@
 
 
 
-#define NUMSTEPS_GPU 1000
+#define NUMSTEPS_GPU 100
 #define PI 3.141592654f
 #define RPI 0.318309886f // Pi Rad
 #define MAX_LAYERS 100
@@ -75,23 +75,23 @@ __host__ __device__ struct LayerStruct {
 	float n;			// Refractive index [-]
 };
 __host__ __device__ struct InputStruct{
-	char	 out_fname[STR_LEN];	/* output file name. */
-	char	 out_fformat;		/* output file format. */
+	//char	 out_fname[STR_LEN];	/* output file name. */
+	//char	 out_fformat;		/* output file format. */à⁄ìÆçœÇ›
 	/* 'A' for ASCII, */
 	/* 'B' for binary. */
-	long	 num_photons; 		/* to be traced. */
-	double r;
-	double Wth; 				/* play roulette if photon */
+	//long	 num_photons; 		/* to be traced. */
+	//double r;
+	//double Wth; 				/* play roulette if photon */
 	/* weight < Wth.*/
 
-	double dt;
-	double da;				/* alpha grid separation. */
+	//double dt;
+	//double da;				/* alpha grid separation. */
 	/* [radian] */
-	short nr;
-	short na;					/* array range 0..na-1. */
+	//short nr;
+	//short na;					/* array range 0..na-1. */
 
-	short	num_layers;			/* number of layers. */
-	LayerStruct * layerspecs;	/* layer parameters. */
+	//short	num_layers;			/* number of layers. */
+	//LayerStruct * layerspecs;	/* layer parameters. */
 };
 __host__ __device__ struct OutStruct{
 	double * Rd_ra;	/* 2D distribution of diffuse */
@@ -201,7 +201,6 @@ __host__ __device__ struct RecStruct{
 };
 
 __host__ __device__ struct SimulationStruct{
-//	InputStruct  	In_Ptr;
 	unsigned long long number_of_photons;
 	int ignoreAdetection;
 	unsigned int n_layers;
@@ -215,13 +214,23 @@ __host__ __device__ struct SimulationStruct{
 	LayerStruct* layers;
 	unsigned int Seed;
 	RecStruct	RecordDoSim;
+	/*à»â∫InputÇ©ÇÁì±ì¸*/
+	char	 out_fformat;
+	double r;
+	double WtH;
+	double dt;
+	double da;				
+	short nr;
+	short na;					
+	__device__ __host__ unsigned int GetRaSize();
+	__device__ __host__ unsigned int GetRzSize();
 };
 
 
 __host__ __device__ struct MemStruct{
 	PhotonStruct* p;// Pointer to structure array containing all the photon data
 	OutStruct *	Out_Ptr;
-
+	SimulationStruct*sim;
 	unsigned long long* x;				// Pointer to the array containing all the WMC x's
 	unsigned int* a;					// Pointer to the array containing all the WMC a's
 	unsigned int* thread_active;		// Pointer to the array containing the thread active status
@@ -288,6 +297,7 @@ public:
 	int MakeRandTableDev();
 	int InitDCMem(SimulationStruct* sim);
 	int InitPhoton();
+	int InitOutput();
 	// GPU,CPUÉÅÉÇÉäÇÃämï€
 	int InitMallocMem(SimulationStruct* sim);
 
@@ -308,15 +318,15 @@ extern "C"{
 	__host__ __device__ double *AllocMatrix(short, short, short, int);
 	__host__ __device__ void 	 FreeVector(double *, short, short);
 	__host__ __device__ void 	 FreeMatrix(double **, short, short, short, short);
-	__host__ __device__ void CalOPL_SD(InputStruct In_Parm, OutStruct * Out_Ptr);
+	__host__ __device__ void CalOPL_SD(SimulationStruct sim, OutStruct * Out_Ptr);
 	__host__ __device__ time_t PunchTime(char F, char * Msg);
-	__host__ __device__ void WriteResult(InputStruct In_Parm, OutStruct Out_Parm, char * TimeReport);
-	__host__ __device__ void SumScaleResult(InputStruct In_Parm, OutStruct * Out_Ptr);
-	__host__ __device__ void WriteInParm(FILE *file, InputStruct In_Parm);
+	__host__ __device__ void WriteResult(SimulationStruct sim, OutStruct Out_Parm, char * TimeReport);
+	__host__ __device__ void SumScaleResult(SimulationStruct sim, OutStruct * Out_Ptr);
+	__host__ __device__ void WriteInParm(FILE *file, SimulationStruct sim);
 	__host__ __device__ void WriteOPL(FILE * file, short nl, OutStruct Out_Parm);
 	__host__ __device__ void WriteRd_p(FILE * file, short Nr, short Na, OutStruct Out_Parm);
 	__host__ __device__ void WriteRd_ra(FILE * file, short Nr, short Na, OutStruct Out_Parm);
 	__host__ __device__ void WriteVersion(FILE *file, char *Version);
-	__host__ __device__ void RecordR(double	Refl, InputStruct  *In_Ptr, PhotonStruct *p, OutStruct *Out_Ptr);
+	//__host__ __device__ void RecordR(double	Refl, SimulationStruct * sim, PhotonStruct *p, OutStruct *Out_Ptr);
 	__host__ __device__ void RemodelRecordR(MemStruct  DeviceMem, PhotonStruct *p);
 }

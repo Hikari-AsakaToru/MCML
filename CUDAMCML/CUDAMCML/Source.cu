@@ -27,7 +27,12 @@ __device__ unsigned int nInitRngLoop=0;
 
 __shared__ PhotonStruct dsh_sPhoton[NUM_THREADS_PER_BLOCK];
 
-
+unsigned int SimulationStruct::GetRaSize(){
+	return det.nr*det.na;
+}
+unsigned int SimulationStruct::GetRzSize(){
+	return det.nr*det.nz;
+}
 //
 // MCML計算の本体
 // 
@@ -247,6 +252,7 @@ template <int ignoreAdetection> __global__ void CalcMCGPU(MemStruct DeviceMem)
 			dsh_sPhoton[tx].z = layers_dc[dsh_sPhoton[tx].layer].z_min;//needed?
 		}
 		//　レイヤー変化していた場合
+		dsh_sPhoton[tx].rr = new_layer;
 
 		if (new_layer != dsh_sPhoton[tx].layer)
 		{
@@ -265,7 +271,7 @@ template <int ignoreAdetection> __global__ void CalcMCGPU(MemStruct DeviceMem)
 					AtomicAddULL(&DeviceMem.Rd_ra[index], dsh_sPhoton[tx].weight);
 					dsh_sPhoton[tx].weight = 0;
 //					RecordR(dsh_sPhoton[tx]->rr, DeviceMem.In_Ptr, &dsh_sPhoton[tx], DeviceMem.Out_Ptr);//rをどうやって持ってくればいいのか
-					RemodelRecordR(DeviceMem, &dsh_sPhoton[tx]);//rをどうやって持ってくればいいのか
+					RemodelRecordR(DeviceMem, &dsh_sPhoton[tx]);
 				}
 				if (new_layer > *n_layers_dc)
 				{	//Transmitted　透過
@@ -325,7 +331,7 @@ template <int ignoreAdetection> __global__ void CalcMCGPU(MemStruct DeviceMem)
 __device__  void LaunchPhoton(LayerStruct  * Layerspecs_Ptr,
 	PhotonStruct* p,
 	OutStruct    * Out_Ptr,
-	InputStruct  * In_Ptr)
+	SimulationStruct  * sim)
 {
 	// We are currently not using the RNG but might do later
 	//float input_fibre_radius = 0.03;//[cm]
@@ -387,6 +393,29 @@ __global__ void LaunchPhoton_Global(PhotonStruct* pd)
 		//DeviceMem->p[begin + tx] = p;//incoherent!?
 		
 	}
+	return;
+}
+__global__ void LaunchOutput_Global(MemStruct  mem)
+{
+	unsigned long long PosData = blockIdx.x*blockDim.x + threadIdx.x;
+	PosData %= mem.sim->GetRaSize();
+	//First element processed by the block
+	
+
+		//	 LaunchPhoton(&pd[PosData], d_x[PosData], d_a[PosData]);
+		(*mem.Out_Ptr->L) = 0.0;
+		(*mem.Out_Ptr->OPL) = 0.0;
+		(*mem.Out_Ptr->opl)= 0.0f;
+		mem.Out_Ptr->P = 0.0f;
+		mem.Out_Ptr->p1 = 0.0f;
+		mem.Out_Ptr->Rd_p[PosData]= 0.0;
+		mem.Out_Ptr->Rd_ra[PosData] = 0.0;
+		mem.Out_Ptr->Rsp= 0.0;
+		
+
+		//DeviceMem->p[begin + tx] = p;//incoherent!?
+
+	
 	return;
 }
 __global__ void SetRandpram(curandState* devState){
@@ -657,6 +686,21 @@ int cCUDAMCML::MakeRandTableDev(){
 	}
 	return 0;
 }
+
+int cCUDAMCML::InitOutput(){
+
+
+	dim3 dimNumBlock(19);
+	dim3 dimNumThread(NUM_THREADS_PER_BLOCK);
+
+	LaunchOutput_Global << < dimNumBlock, dimNumThread >> > (m_sDeviceMem);
+	cudaError_t cudastat = cudaGetLastError();	// Check if there was an error
+
+	if (cudastat){
+		return _ERR_GPU_SIM_LANCH_PHOTON_;
+	}
+	return 0;
+}
 int cCUDAMCML::InitPhoton(){
 
 
@@ -701,6 +745,8 @@ int cCUDAMCML::DoOneSimulation(SimulationStruct* simulation)
 		}
 		// 検証用
 		cudastat = cudaMemcpy(m_sHostMem.p, m_sDeviceMem.p, NUM_THREADS * sizeof(PhotonStruct), cudaMemcpyDeviceToHost);
+		cudastat = cudaMemcpy(m_sHostMem.x, m_sDeviceMem.x, NUM_THREADS * sizeof(unsigned long  long), cudaMemcpyDeviceToHost);
+		cudastat = cudaMemcpy(m_sHostMem.a, m_sDeviceMem.a, NUM_THREADS * sizeof(unsigned int ), cudaMemcpyDeviceToHost);
 		cudastat = cudaMemcpy(m_sHostMem.thread_active, m_sDeviceMem.thread_active, NUM_THREADS * sizeof(unsigned int), cudaMemcpyDeviceToHost);
 		cudastat = cudaMemcpy(m_sHostMem.num_terminated_photons, m_sDeviceMem.num_terminated_photons,sizeof(unsigned int), cudaMemcpyDeviceToHost);
 		//	cudaThreadSynchronize();		// Wait for all threads to finish
@@ -754,8 +800,8 @@ int cCUDAMCML::InitMallocMem(SimulationStruct* sim){
 	if (tmp != cudaSuccess) {
 		State |= 0x40;
 	}
-	int rz_size = sim->det.nr*sim->det.nz;
-	int ra_size = sim->det.nr*sim->det.na;
+	unsigned int rz_size =  sim->GetRzSize(); 
+	unsigned int ra_size = sim->GetRaSize(); 
 	tmp = cudaMalloc((void**)&m_sDeviceMem.A_rz, rz_size *sizeof(unsigned long long));
 	if (tmp != cudaSuccess) {
 		State |= 0x80;
@@ -767,6 +813,11 @@ int cCUDAMCML::InitMallocMem(SimulationStruct* sim){
 	tmp = cudaMalloc((void**)&m_sDeviceMem.Tt_ra, ra_size*sizeof(unsigned long long));
 	if (tmp != cudaSuccess) {
 		State |= 0x200;
+	}
+
+	tmp = cudaMalloc((void**)&m_sDeviceMem.sim, sizeof(SimulationStruct));
+	if (tmp != cudaSuccess) {
+		State |= 0x400;
 	}
 
 	tmp = cudaMalloc((void**)&m_sDeviceMem.Out_Ptr, sizeof(OutStruct));
@@ -811,7 +862,7 @@ int cCUDAMCML::InitMallocMem(SimulationStruct* sim){
 	m_sDeviceMem.Out_Ptrの中身が確保できる．
 
 					 1  2  3  4  5  6   7  8
-	Hostのメモリ    [6  7  8][0][2]						[6 7 8]	・・・TmpOutStructの中身(deviceの場所)
+	Hostのメモリ    [6]  7  8][0][2]						[6 7 8]	・・・TmpOutStructの中身(deviceの場所)
 	Dev のメモリ	[0][6  7  8][0][Rd][L][OP]			[d]		・・・Out_Ptrが確保した場所(dataのd) こんな感じ
 
 	ソースは2ch(http://toro.2ch.net/test/read.cgi/tech/1314104886/)[108~111参照]
@@ -851,6 +902,7 @@ int cCUDAMCML::InitMallocMem(SimulationStruct* sim){
 //		State |= 0x20000;
 //	}
 	cudaMemcpy(m_sDeviceMem.Out_Ptr, &m_sOutStruct, sizeof(OutStruct), cudaMemcpyHostToDevice);
+
 
 	// Allocate p on the device!!
 	// Allocate A_rz on host and device
@@ -907,10 +959,13 @@ int cCUDAMCML::InitMallocMem(SimulationStruct* sim){
 		State |= 0x0020000000;
 	}
 	m_sHostMem.Out_Ptr->opl = new double ,sizeof (double);
-	if (m_sHostMem.Out_Ptr->Rd_p == NULL){
+	if (m_sHostMem.Out_Ptr->opl == NULL){
 		State |= 0x0040000000;
 	}
-	
+	m_sHostMem.sim = new SimulationStruct, sizeof(SimulationStruct);
+	if (m_sHostMem.sim == NULL){
+		State |= 0x0080000000;
+	}
 	
 
 	return State ;
@@ -920,7 +975,7 @@ void cCUDAMCML::CopyDeviceToHostMem(MemStruct* HostMem, MemStruct* DeviceMem, Si
 
 	int rz_size = sim->det.nr*sim->det.nz;
 	int ra_size = sim->det.nr*sim->det.na;
-
+	cudaError_t tmp;
 	// Copy A_rz, Rd_ra and Tt_ra
 	cudaMemcpy(HostMem->A_rz, DeviceMem->A_rz, rz_size*sizeof(unsigned long long), cudaMemcpyDeviceToHost);
 	cudaMemcpy(HostMem->Rd_ra, DeviceMem->Rd_ra, ra_size*sizeof(unsigned long long), cudaMemcpyDeviceToHost);
@@ -932,7 +987,10 @@ void cCUDAMCML::CopyDeviceToHostMem(MemStruct* HostMem, MemStruct* DeviceMem, Si
 
 	//Also copy the state of the RNG's
 	cudaMemcpy(HostMem->p, DeviceMem->p, NUM_THREADS *sizeof(PhotonStruct), cudaMemcpyDeviceToHost);
+	tmp = cudaMemcpy(HostMem->Out_Ptr->opl, m_sOutStruct.opl, sizeof(double), cudaMemcpyDeviceToHost);
+	if (tmp != cudaSuccess) {
 
+	}
 	return ;
 }
 int cCUDAMCML::CopyHostToDeviceMem(MemStruct* HostMem, MemStruct* DeviceMem, SimulationStruct* sim){
@@ -1159,6 +1217,11 @@ int cCUDAMCML::InitContentsMem(SimulationStruct* sim)
 		State |= 0x400;
 	}
 
+	HostMem->sim = m_simulations;
+	tmp = cudaMemcpy(DeviceMem->sim, HostMem->sim, sizeof(SimulationStruct), cudaMemcpyHostToDevice);
+	if (tmp != cudaSuccess) {
+		State |= 0x800;
+	}
 	return State;
 }
 
@@ -1242,7 +1305,7 @@ void cCUDAMCML::InitGPUStat(){
 extern "C"{
 	__host__ __device__ void RemodelRecordR(MemStruct  DeviceMem, PhotonStruct *p)
 	{
-		InputStruct *In_Ptr = DeviceMem.In_Ptr;
+		SimulationStruct*sim = DeviceMem.sim;
 		OutStruct	*Out_Ptr = DeviceMem.Out_Ptr;
 		double	Refl = p->rr;
 		double x = p->x;
@@ -1252,11 +1315,11 @@ extern "C"{
 		double dz = p->dz;
 		double t;
 		double r;
-		double r1 = In_Ptr->r;
+		double r1 = sim->r;
 		double t1, t2, t3;
 		short  it, ia;	/* index to r & angle. */
 		double itd, iad;	/* LW 5/20/98. To avoid out of short range.*/
-		short  nl = In_Ptr->num_layers;
+		short  nl = sim->n_layers;
 		short	 l;
 		int	 n = Out_Ptr->p1;
 		int id;
@@ -1281,16 +1344,16 @@ extern "C"{
 			else
 				t = t3;
 
-			itd = (short)(t / In_Ptr->dt);
-			if (itd > In_Ptr->nr - 1) it = In_Ptr->nr - 1;
+			itd = (short)(t / sim->dt);
+			if (itd > sim->nr - 1) it = sim->nr - 1;
 			else it = itd;
 
-			iad = (short)(acos(-dz) * 180 / PI / In_Ptr->da);
-			if (iad > In_Ptr->na - 1) ia = In_Ptr->na - 1;
+			iad = (short)(acos(-dz) * 180 / PI / sim->da);
+			if (iad > sim->na - 1) ia = sim->na - 1;
 			else ia = iad;
 
-			Out_Ptr->Rd_ra[In_Ptr->nr*ia + it] += p->weight*(1.0 - Refl);		/* 各天頂角・各方位角の光子ウェイトの記録 */
-			Out_Ptr->Rd_p[In_Ptr->nr*ia + it] += 1;							/* 各天頂角・各方位角の光子数の記録 */
+			Out_Ptr->Rd_ra[sim->nr*ia + it] += p->weight*(1.0 - Refl);		/* 各天頂角・各方位角の光子ウェイトの記録 */
+			Out_Ptr->Rd_p[sim->nr*ia + it] += 1;							/* 各天頂角・各方位角の光子数の記録 */
 			Out_Ptr->P += p->weight*(1.0 - Refl);
 
 			for (l = 1; l <= nl; l++)
@@ -1361,12 +1424,12 @@ extern "C"{
 	//
 	//	p->weight *= Refl;
 	//}
-	__host__ __device__ void InitOutputData(MemStruct deviceMem, InputStruct In_Parm,
+	__host__ __device__ void InitOutputData(MemStruct deviceMem, SimulationStruct sim,
 		OutStruct * Out_Ptr)
 	{
-		short nr = In_Parm.nr;
-		short na = In_Parm.na;
-		short nl = In_Parm.num_layers;
+		short nr = sim.nr;
+		short na = sim.na;
+		short nl = sim.n_layers;
 		/* remember to use nl+2 because of 2 for ambient. */
 
 		if (nr <= 0 || na <= 0 || nl <= 0)
@@ -1383,15 +1446,15 @@ extern "C"{
 		Out_Ptr->L = AllocVector(0, nl + 1);
 		Out_Ptr->opl = AllocVector(0, nl + 1);
 	}
-	void ReportResult(InputStruct In_Parm, OutStruct Out_Parm)
+	void ReportResult(SimulationStruct sim, OutStruct Out_Parm)
 	{
 		char time_report[STR_LEN];
 
 		strcpy(time_report, " Simulation time of this run.");
 		PunchTime(1, time_report);
 
-		SumScaleResult(In_Parm, &Out_Parm);
-		WriteResult(In_Parm, Out_Parm, time_report);
+		SumScaleResult(sim, &Out_Parm);
+		WriteResult(sim, Out_Parm, time_report);
 	}
 	__host__ __device__ time_t PunchTime(char F, char *Msg)
 	{
@@ -1421,20 +1484,20 @@ extern "C"{
 		else return(0);
 #endif
 	}
-	__host__ __device__ void SumScaleResult(InputStruct In_Parm, OutStruct * Out_Ptr)
+	__host__ __device__ void SumScaleResult(SimulationStruct sim, OutStruct * Out_Ptr)
 	{
-		CalOPL_SD(In_Parm, Out_Ptr);
+		CalOPL_SD(sim, Out_Ptr);
 	}
-	__host__ void WriteResult(InputStruct In_Parm,
+	__host__ void WriteResult(SimulationStruct sim,
 		OutStruct Out_Parm,
 		char * TimeReport)
 	{
 		FILE *file;
 
-		file = fopen(In_Parm.out_fname, "w");
+		file = fopen(sim.outp_filename, "w");
 		//	if (file == NULL) nrerror("Cannot open file to write.\n");
 
-		if (toupper(In_Parm.out_fformat) == 'A')
+		if (toupper(sim.out_fformat) == 'A')
 			WriteVersion(file, "A1");
 		else
 			WriteVersion(file, "B1");
@@ -1442,22 +1505,22 @@ extern "C"{
 		fprintf(file, "# %s", TimeReport);
 		fprintf(file, "\n");
 
-		WriteInParm(file, In_Parm);
+		WriteInParm(file, sim);
 		/* reflectance, absorption, transmittance. */
 
 		/* 1D arrays. */
 
 		/* 2D arrays. */
-		WriteRd_ra(file, In_Parm.nr, In_Parm.na, Out_Parm);
-		WriteRd_p(file, In_Parm.nr, In_Parm.na, Out_Parm);
-		WriteOPL(file, In_Parm.num_layers, Out_Parm);
+		WriteRd_ra(file, sim.nr, sim.na, Out_Parm);
+		WriteRd_p(file, sim.nr, sim.na, Out_Parm);
+		WriteOPL(file, sim.n_layers, Out_Parm);
 
 		fclose(file);
 	}
-	__device__ __host__ void CalOPL_SD(InputStruct In_Parm, OutStruct * Out_Ptr)
+	__device__ __host__ void CalOPL_SD(SimulationStruct sim, OutStruct * Out_Ptr)
 	{
 		short l;
-		short	nl = In_Parm.num_layers;
+		short	nl = sim.n_layers;
 
 		for (l = 1; l <= nl; l++)
 			Out_Ptr->opl[l] = Out_Ptr->L[l] / Out_Ptr->P;		/* 第n層に入った光子の光路長の平均 */
@@ -1487,42 +1550,42 @@ extern "C"{
 	/***********************************************************
 	*	Write the input parameters to the file.
 	****/
-	void WriteInParm(FILE *file, InputStruct In_Parm)
+	void WriteInParm(FILE *file, SimulationStruct sim)
 	{
 		short i;
-
+	
 		fprintf(file,
 			"InParm \t\t\t# Input parameters. cm is used.\n");
-
+    
 		fprintf(file,
 			"%s \tA\t\t# output file name, ASCII.\n",
-			In_Parm.out_fname);
+			sim.outp_filename);
 		fprintf(file,
-			"%ld \t\t\t# No. of photons\n", In_Parm.num_photons);
+			"%ld \t\t\t# No. of photons\n", sim.number_of_photons);
 		fprintf(file,
-			"%.2lf \t\t\t# No. of SD distance\n", In_Parm.r);
+			"%.2lf \t\t\t# No. of SD distance\n", sim.r);
 
 		fprintf(file,
-			"%G\t\t\t\t# dt [cm]\n", In_Parm.dt);
+			"%G\t\t\t\t# dt [cm]\n", sim.dt);
 		fprintf(file, "%hd\t%hd\t\t# No. of dt, da.\n\n",
-			In_Parm.nr, In_Parm.na);
-
+			sim.nr, sim.na);
+	
 		fprintf(file,
 			"%hd\t\t\t\t\t# Number of layers\n",
-			In_Parm.num_layers);
+			sim.n_layers);
 		fprintf(file,
 			"#n\tmua\tmus\tg\td\t# One line for each layer\n");
 		fprintf(file,
 			"%G\t\t\t\t\t# n for medium above\n",
-			In_Parm.layerspecs[0].n);
-		for (i = 1; i <= In_Parm.num_layers; i++)  {
+			sim.layers[0].n);
+		for (i = 1; i <= sim.n_layers; i++)  {
 			LayerStruct s;
-			s = In_Parm.layerspecs[i];
+			s = sim.layers[i];
 			fprintf(file, "%G\t%G\t%G\t%G\t%G\t# layer %hd\n",
 				s.n, s.mua, s.mutr, s.g, s.z_max - s.z_min, i);
 		}
 		fprintf(file, "%G\t\t\t\t\t# n for medium below\n\n",
-			In_Parm.layerspecs[i].n);
+			sim.layers[i].n);
 	}
 	__host__ void WriteRd_ra(FILE * file,
 		short Nr,
@@ -1561,16 +1624,15 @@ extern "C"{
 		OutStruct Out_Parm)
 	{
 		short it, ia;
-
+	
 		fprintf(file,
 			"%s\n%s\n%s\n%s\n%s\n%s\n",	/* flag. */
 			"# Rd[theta][angle]. [1/(cm2sr)].",
-			"# Rd[0][0], [0][1],..[0][na-1]",
 			"# Rd[1][0], [1][1],..[1][na-1]",
 			"# ...",
 			"# Rd[nt-1][0], [nt-1][1],..[nt-1][na-1]",
 			"Rd_p");
-
+	
 		for (it = 0; it < Nr; it++)
 		{
 			for (ia = 0; ia < Na; ia++)
@@ -1592,7 +1654,7 @@ extern "C"{
 		OutStruct Out_Parm)
 	{
 		short l;
-
+	
 		for (l = 1; l <= nl; l++)
 		{
 			fprintf(file, "The %d layer\n", l);
@@ -1603,17 +1665,17 @@ extern "C"{
 	__host__ __device__ double *AllocMatrix(short nrl, short nrh, short ncl, int nch)
 	{
 		long i, j;
-		double *m;
+		double * m;
 
 		m = (double *)malloc((unsigned)(nrh - nrl + 1)*(nch - ncl + 1) *sizeof(double*));
 		//if (!m) nrerror("allocation failure 1 in matrix()");
-		//m -= nrl;
+		m -= nrl;
 
-		//for (i = nrl; i <= nrh; i++) {
-		//m[i] = (double *)malloc((unsigned)(nch - ncl + 1) *sizeof(double));
+		for (i = nrl; i <= nrh; i++) {
+		//m[i] = (double )malloc((unsigned)(nch - ncl + 1) *sizeof(double));
 		//if (!m[i]) nrerror("allocation failure 2 in matrix()");
-		//m[i] -= ncl;
-		//}
+		m[i] -= ncl;
+		}
 
 		for (i = nrl; i <= nrh; i++)
 			for (j = ncl; j <= nch; j++) m[i*(nrh - nrl + 1) + j] = 0.0;

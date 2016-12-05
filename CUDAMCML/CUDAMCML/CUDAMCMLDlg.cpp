@@ -345,20 +345,25 @@ int cMCML::WriteSimRslts(MemStruct* HostMem, SimulationStruct* sim)
 	}
 	// Rd_ra
 
-	for (int it = 0; it < HostMem->In_Ptr->nr; it++)
+	for (int it = 0; it < sim->nr; it++)
 	{
-		for (int ia = 0; ia < HostMem->In_Ptr->na; ia++)
+		for (int ia = 0; ia < HostMem->sim->na; ia++)
 		{
 			TransCstr.Format(_T("%12.4E,"), HostMem->Out_Ptr->Rd_ra[it + sim->det.nr*ia]);
 			cOutputFile.WriteString(TransCstr);
-			if ((it*HostMem->In_Ptr->na + ia + 1) % 9 == 0) cOutputFile.WriteString(_T("\n"));
+			if ((it*HostMem->sim->na + ia + 1) % 9 == 0) cOutputFile.WriteString(_T("\n"));
 		}
 	}
-
 	cOutputFile.WriteString(_T("\nStartWeight \n"));
-	TransCstr.Format(_T("%21u"), sim->start_weight);
-	cOutputFile.WriteString(TransCstr + _T(",\t"));
+	
 
+	WriteOPL(&cOutputFile);
+	WriteRd_p(&cOutputFile);
+	WriteInParm(&cOutputFile,*sim);
+	WriteRd_ra(&cOutputFile);
+	
+
+	
 	return 0;
 
 }
@@ -405,13 +410,20 @@ CString cMCML::ReadSimData(CString* filename, SimulationStruct** simulations, in
 	for (int nLoop = 0; nLoop < m_nRunCount; nLoop++){
 
 		cInputFileIO.ReadFile1CStr	( &m_cstrOutputName);
-		cInputFileIO.ReadFile1UInt64( &(*simulations)[nLoop].In_Ptr.number_of_photons);
+		cInputFileIO.ReadFile1UInt64( &(*simulations)[nLoop].number_of_photons);
 		cInputFileIO.ReadFile1Flt	( &(*simulations)[nLoop].det.dz);
 		cInputFileIO.ReadFile1Flt	( &(*simulations)[nLoop].det.dr);
 		cInputFileIO.ReadFile1UInt	( &(*simulations)[nLoop].det.nz);
 		cInputFileIO.ReadFile1UInt	( &(*simulations)[nLoop].det.nr);
 		cInputFileIO.ReadFile1UInt	( &(*simulations)[nLoop].det.na);
+		cInputFileIO.ReadFile1Dbl	( &(*simulations)[nLoop].r);		// SD
+		cInputFileIO.ReadFile1Sht	( &(*simulations)[nLoop].nr);
+		cInputFileIO.ReadFile1Sht	( &(*simulations)[nLoop].na);
+		(*simulations)[nLoop].dt = 360 / (*simulations)[nLoop].nr;
+		(*simulations)[nLoop].da = 90 / (*simulations)[nLoop].na;
+
 		cInputFileIO.ReadFile1UInt	( &(*simulations)[nLoop].n_layers);
+
 		(*simulations)[nLoop].Seed = Seed;
 		// 入力ファイル名
 		strcpy_s((*simulations)[nLoop].inp_filename, TmpStrInp.c_str());
@@ -447,6 +459,8 @@ CString cMCML::ReadSimData(CString* filename, SimulationStruct** simulations, in
 		cInputFileIO.ReadFile1UInt( &tmpuiMed);
 		(*simulations)[nLoop].layers[0].n = (float)tmpuiMed;
 		(*simulations)[nLoop].layers[0].g = 0;
+		(*simulations)[nLoop].layers[0].z_min = -9999.9;
+		(*simulations)[nLoop].layers[0].z_max = 0.00;
 
 		// レイヤー情報の保存
 		dtot = 0;
@@ -621,6 +635,7 @@ CString cMCML::StartSim(CString* chPathName, int nPathName, CString* cstrB32Name
 		unsigned int InitState = 0;
 		// フォトンの分割数に基づいて繰り返し
 		auto Start = std::chrono::system_clock::now();
+		InitOutput();
 		for (int nDivNum = 0; nDivNum < m_simulations[nRun].nDivedSimNum; nDivNum++){
 		int	 RunStatus = MakeRandTableDev();
 			 RunStatus = InitPhoton();		

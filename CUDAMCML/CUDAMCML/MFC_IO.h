@@ -14,7 +14,7 @@ class FileIO{
 		return TRUE;
 	}
 public:
-	inline bool ReadFile1Flt( float* RetDATA){
+	inline bool ReadFile1Flt(float* RetDATA){
 		while (ReadStringRdy(cOpenedFile)){
 			unsigned int ntmpStartStr = m_nNumStr;	// 開始文字位置（タブ，スペース数)
 			while (m_tmpStrData.Mid(ntmpStartStr, 1) == " "
@@ -39,6 +39,49 @@ public:
 				}
 				else{
 					*RetDATA = _tcstof(m_tmpStrData.Mid(ntmpStartStr, ntmpEndStr - ntmpStartStr), NULL);
+					m_nNumStr = 0;
+				}
+				return TRUE;
+			}
+			else{
+				if (m_tmpStrData.Mid(ntmpEndStr, 1) == "#"
+					|| m_tmpStrData.Mid(ntmpEndStr, 1) == "\0"
+					){
+					m_nNumStr = 0;
+				}
+				else{
+					m_nNumStr++;
+				}
+			}
+
+		}
+		return FALSE;
+	}
+	inline bool ReadFile1Dbl(double* RetDATA){
+		while (ReadStringRdy(cOpenedFile)){
+			unsigned int ntmpStartStr = m_nNumStr;	// 開始文字位置（タブ，スペース数)
+			while (m_tmpStrData.Mid(ntmpStartStr, 1) == " "
+				|| m_tmpStrData.Mid(ntmpStartStr, 1) == "\t"
+				){
+				ntmpStartStr++;
+			}
+			unsigned int ntmpEndStr = ntmpStartStr;	// 終端文字位置
+			while (m_tmpStrData.Mid(ntmpEndStr, 1) != "#"
+				&& m_tmpStrData.Mid(ntmpEndStr, 1) != ","
+				&& m_tmpStrData.Mid(ntmpEndStr, 1) != " "
+				&& m_tmpStrData.Mid(ntmpEndStr, 1) != "\t"
+				&& m_tmpStrData.Mid(ntmpEndStr, 1) != "\0"
+				){
+				ntmpEndStr++;
+			}
+			if (ntmpEndStr != ntmpStartStr){
+				if (m_tmpStrData.Mid(ntmpEndStr, 1) != "#"
+					){
+					*RetDATA = _tcstod(m_tmpStrData.Mid(ntmpStartStr, ntmpEndStr - ntmpStartStr), NULL);
+					m_nNumStr = ntmpEndStr + 1;
+				}
+				else{
+					*RetDATA = _tcstod(m_tmpStrData.Mid(ntmpStartStr, ntmpEndStr - ntmpStartStr), NULL);
 					m_nNumStr = 0;
 				}
 				return TRUE;
@@ -208,6 +251,47 @@ public:
 				}
 				else{
 					*RetDATA = _tcstoui64(m_tmpStrData.Mid(ntmpStartStr, ntmpEndStr - ntmpStartStr), NULL, 10);
+					m_nNumStr = 0;
+				}
+				return TRUE;
+			}
+			else{
+				if (m_tmpStrData.Mid(ntmpEndStr, 1) == "#"
+					|| m_tmpStrData.Mid(ntmpEndStr, 1) == "\0"
+					){
+					m_nNumStr = 0;
+				}
+				else{
+					m_nNumStr++;
+				}
+			}
+		}
+		return FALSE;
+	}
+	inline bool ReadFile1Sht(short* RetDATA){
+		while (ReadStringRdy(cOpenedFile)){
+			unsigned int ntmpStartStr = m_nNumStr;	// 開始文字位置（タブ，スペース数)
+			while (m_tmpStrData.Mid(ntmpStartStr, 1) == " "
+				|| m_tmpStrData.Mid(ntmpStartStr, 1) == "\t"
+				){
+				ntmpStartStr++;
+			}
+			unsigned int ntmpEndStr = ntmpStartStr;	// 終端文字位置
+			while (m_tmpStrData.Mid(ntmpEndStr, 1) != "#"
+				&& m_tmpStrData.Mid(ntmpEndStr, 1) != ","
+				&& m_tmpStrData.Mid(ntmpEndStr, 1) != " "
+				&& m_tmpStrData.Mid(ntmpEndStr, 1) != "\t"
+				){
+				ntmpEndStr++;
+			}
+			if (ntmpEndStr != ntmpStartStr){
+				if (m_tmpStrData.Mid(ntmpEndStr, 1) != "#"
+					){
+					*RetDATA = (short)_tcstol(m_tmpStrData.Mid(ntmpStartStr, ntmpEndStr - ntmpStartStr), NULL, 10);
+					m_nNumStr = ntmpEndStr + 1;
+				}
+				else{
+					*RetDATA = (short)_tcstol(m_tmpStrData.Mid(ntmpStartStr, ntmpEndStr - ntmpStartStr), NULL, 10);
 					m_nNumStr = 0;
 				}
 				return TRUE;

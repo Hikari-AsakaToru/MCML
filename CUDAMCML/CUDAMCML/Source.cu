@@ -3,6 +3,7 @@
 #define _NVCC_
 #include "CUDAMCML_GPGPU.h"
 #include <curand_kernel.h>
+#include <fstream>
 
 #define _ERR_GPU_SIM_RND_ 1
 #define _ERR_GPU_SIM_MEMCPY_ 2
@@ -33,149 +34,185 @@ unsigned int SimulationStruct::GetRaSize(){
 unsigned int SimulationStruct::GetRzSize(){
 	return det.nr*det.nz;
 }
-//
-// MCML計算の本体
-// 
-template <int ignoreAdetection> __global__ void MCd(MemStruct DeviceMem)
-{
+
+__global__ void ReflectTest(MemStruct DeviceMem){
 	//Block index
 	int bx = blockIdx.x;
 
 	//Thread index
 	int tx = threadIdx.x;
+	int new_layer = 0;
+
 
 
 	//First element processed by the block
 	int begin = blockDim.x*bx;
+	PhotonStruct* p = &DeviceMem.p[begin + tx];
+	p->dead = 0;
+	p->s = 0;
+	p->sleft = 0;
 
-
-
-	unsigned long long int x = DeviceMem.x[begin + tx];//coherent
-	unsigned int a = DeviceMem.a[begin + tx];//coherent
-
-	float s;	//step length
-	//p->s = s;   //PhotonStructのsとの同期が必要？
-
-	unsigned long long index, w, index_old,DataPos;
-	index_old = 0;
-	w = 0;
-	unsigned int w_temp;
-	DataPos = *DeviceMem.num_terminated_photons;
-
-	PhotonStruct p = DeviceMem.p[begin + tx];
+	p->x = 0.0f;
+	p->y = 0.0f;
+	p->z = 0.001f;
+	p->dx = 0.2f;
+	p->dy = 0.3f;
+	p->dz = -0.9f+tx*0.001;
 	
+	p->dx = p->dx / sqrt(p->dx*p->dx + p->dy*p->dy + p->dz*p->dz);
+	p->dy = p->dy / sqrt(p->dx*p->dx + p->dy*p->dy + p->dz*p->dz);
+	p->dz = p->dz / sqrt(p->dx*p->dx + p->dy*p->dy + p->dz*p->dz);
+	
+	p->layer = 1;
+	p->weight = *start_weight_dc;
+	p->dead=Reflect(DeviceMem.p, 0, DeviceMem.x, DeviceMem.a);
 
-	int new_layer;
+}
 
-	//First, make sure the thread (photon) is active
-	unsigned int ii = 0;
-	if (!DeviceMem.thread_active[begin + tx]){
-		ii = NUMSTEPS_GPU;
-	}
-
-	for (; ii<NUMSTEPS_GPU; ii++) //this is the main while loop
-	{
-		if (layers_dc[p.layer].mutr != FLT_MAX)
-			p.s = -__logf(rand_MWC_oc(&x, &a))*layers_dc[p.layer].mutr;//sample step length [cm] //HERE AN OPEN_OPEN FUNCTION WOULD BE APPRECIATED
-		else
-			p.s = 100.0f;//temporary, say the step in glass is 100 cm.
-
-		//Check for layer transitions and in case, calculate s
-		new_layer = p.layer;
-		if (p.z + s*p.dz<layers_dc[p.layer].z_min){ new_layer--; s = __fdividef(layers_dc[p.layer].z_min - p.z, p.dz); } //Check for upwards reflection/transmission & calculate new s
-		if (p.z + s*p.dz>layers_dc[p.layer].z_max){ new_layer++; s = __fdividef(layers_dc[p.layer].z_max - p.z, p.dz); } //Check for downward reflection/transmission
-
-		p.x += p.dx*s;
-		p.y += p.dy*s;
-		p.z += p.dz*s;
-
-		if (p.z>layers_dc[p.layer].z_max)p.z = layers_dc[p.layer].z_max;//needed?
-		if (p.z<layers_dc[p.layer].z_min)p.z = layers_dc[p.layer].z_min;//needed?
-
-		if (new_layer != p.layer)
-		{
-			// set the remaining step length to 0
-			s = 0.0f;
-
-			if (Reflect(&p, new_layer, &x, &a) == 0u)//Check for reflection
-			{ // Photon is transmitted
-				if (new_layer == 0)
-				{ //Diffuse reflectance
-					index = __float2int_rz(acosf(-p.dz)*2.0f*RPI*det_dc[0].na)*det_dc[0].nr + min(__float2int_rz(__fdividef(sqrtf(p.x*p.x + p.y*p.y), det_dc[0].dr)), (int)det_dc[0].nr - 1);
-					AtomicAddULL(&DeviceMem.Rd_ra[index], p.weight);
-					p.weight = 0; // Set the remaining weight to 0, effectively killing the photon
-				}
-				if (new_layer > *n_layers_dc)
-				{	//Transmitted
-					index = __float2int_rz(acosf(p.dz)*2.0f*RPI*det_dc[0].na)*det_dc[0].nr + min(__float2int_rz(__fdividef(sqrtf(p.x*p.x + p.y*p.y), det_dc[0].dr)), (int)det_dc[0].nr - 1);
-					AtomicAddULL(&DeviceMem.Tt_ra[index], p.weight);
-					p.weight = 0; // Set the remaining weight to 0, effectively killing the photon
-				}
-			}
-		}
-
-		//w=0;
-
-		if (s > 0.0f)
-		{
-			// Drop weight (apparently only when the photon is scattered)
-			w_temp = __float2uint_rn(layers_dc[p.layer].mua*layers_dc[p.layer].mutr*__uint2float_rn(p.weight));
-			p.weight -= w_temp;
-
-
-			//w = __float2uint_rn(layers_dc[p.layer].mua*layers_dc[p.layer].mutr*__uint2float_rn(p.weight));
-			//p.weight -= w;
-
-			if (ignoreAdetection == 0) // Evaluated at compiletime!
-			{
-				index = (min(__float2int_rz(__fdividef(p.z, det_dc[0].dz)), (int)det_dc[0].nz - 1)*det_dc[0].nr + min(__float2int_rz(__fdividef(sqrtf(p.x*p.x + p.y*p.y), det_dc[0].dr)), (int)det_dc[0].nr - 1));
-				if (index == index_old)
-				{
-					w += w_temp;
-					//p.weight -= __float2uint_rn(layers_dc[p.layer].mua*layers_dc[p.layer].mutr*__uint2float_rn(p.weight)); 
-				}
-				else// if(w!=0)
-				{
-					AtomicAddULL(&DeviceMem.A_rz[index_old], w);
-					index_old = index;
-					w = w_temp;
-				}
-
-			}
-
-			Spin(&p, &x, &a, layers_dc[p.layer].g);
-		}
-
-
-
-
-		if (!PhotonSurvive(&p, &x, &a)) // Check if photons survives or not
-		{
-			if (atomicAdd(DeviceMem.num_terminated_photons, 1u) < (*num_photons_dc))
-			{	// Ok to launch another photon
-				LaunchPhoton(&p);//Launch a new photon
-			}
-			else
-			{	// No more photons should be launched. 
-				DeviceMem.thread_active[DataPos] = 0u; // Set thread to inactive
-				ii = NUMSTEPS_GPU;				// Exit main loop
-			}
-
-		}
-	}//end main for loop!
-	if (ignoreAdetection == 1 && w != 0)
-		AtomicAddULL(&DeviceMem.A_rz[index_old], w);
-
-	__syncthreads();//necessary?
-
-	//save the state of the MC simulation in global memory before exiting
-	DeviceMem.p[DataPos] = p;	//This one is incoherent!!!
-	DeviceMem.x[DataPos] = x; //this one also seems to be coherent
-
-
-}//end MCd
+//
+// MCML計算の本体
+//// 
+//template <int ignoreAdetection> __global__ void MCd(MemStruct DeviceMem)
+//{
+//	//Block index
+//	int bx = blockIdx.x;
+//
+//	//Thread index
+//	int tx = threadIdx.x;
+//
+//
+//	//First element processed by the block
+//	int begin = blockDim.x*bx;
+//
+//
+//
+//	unsigned long long int x = DeviceMem.x[begin + tx];//coherent
+//	unsigned int a = DeviceMem.a[begin + tx];//coherent
+//
+//	float s;	//step length
+//	//p->s = s;   //PhotonStructのsとの同期が必要？
+//
+//	unsigned long long index, w, index_old,DataPos;
+//	index_old = 0;
+//	w = 0;
+//	unsigned int w_temp;
+//	DataPos = *DeviceMem.num_terminated_photons;
+//
+//	PhotonStruct p = DeviceMem.p[begin + tx];
+//	
+//
+//	int new_layer;
+//
+//	//First, make sure the thread (photon) is active
+//	unsigned int ii = 0;
+//	if (!DeviceMem.thread_active[begin + tx]){
+//		ii = NUMSTEPS_GPU;
+//	}
+//
+//	for (; ii<NUMSTEPS_GPU; ii++) //this is the main while loop
+//	{
+//		if (layers_dc[p.layer].mutr != FLT_MAX)
+//			p.s = -__logf(rand_MWC_oc(&x, &a))*layers_dc[p.layer].mutr;//sample step length [cm] //HERE AN OPEN_OPEN FUNCTION WOULD BE APPRECIATED
+//		else
+//			p.s = 100.0f;//temporary, say the step in glass is 100 cm.
+//
+//		//Check for layer transitions and in case, calculate s
+//		new_layer = p.layer;
+//		if (p.z + s*p.dz<layers_dc[p.layer].z_min){ new_layer--; s = __fdividef(layers_dc[p.layer].z_min - p.z, p.dz); } //Check for upwards reflection/transmission & calculate new s
+//		if (p.z + s*p.dz>layers_dc[p.layer].z_max){ new_layer++; s = __fdividef(layers_dc[p.layer].z_max - p.z, p.dz); } //Check for downward reflection/transmission
+//
+//		p.x += p.dx*s;
+//		p.y += p.dy*s;
+//		p.z += p.dz*s;
+//
+//		if (p.z>layers_dc[p.layer].z_max)p.z = layers_dc[p.layer].z_max;//needed?
+//		if (p.z<layers_dc[p.layer].z_min)p.z = layers_dc[p.layer].z_min;//needed?
+//
+//		if (new_layer != p.layer)
+//		{
+//			// set the remaining step length to 0
+//			s = 0.0f;
+//
+//			if (Reflect(&p, new_layer, &x, &a) == 0u)//Check for reflection
+//			{ // Photon is transmitted
+//				if (new_layer == 0)
+//				{ //Diffuse reflectance
+//					index = __float2int_rz(acosf(-p.dz)*2.0f*RPI*det_dc[0].na)*det_dc[0].nr + min(__float2int_rz(__fdividef(sqrtf(p.x*p.x + p.y*p.y), det_dc[0].dr)), (int)det_dc[0].nr - 1);
+//					AtomicAddULL(&DeviceMem.Rd_ra[index], p.weight);
+//					p.weight = 0; // Set the remaining weight to 0, effectively killing the photon
+//				}
+//				if (new_layer > *n_layers_dc)
+//				{	//Transmitted
+//					index = __float2int_rz(acosf(p.dz)*2.0f*RPI*det_dc[0].na)*det_dc[0].nr + min(__float2int_rz(__fdividef(sqrtf(p.x*p.x + p.y*p.y), det_dc[0].dr)), (int)det_dc[0].nr - 1);
+//					AtomicAddULL(&DeviceMem.Tt_ra[index], p.weight);
+//					p.weight = 0; // Set the remaining weight to 0, effectively killing the photon
+//				}
+//			}
+//		}
+//
+//		//w=0;
+//
+//		if (s > 0.0f)
+//		{
+//			// Drop weight (apparently only when the photon is scattered)
+//			w_temp = __float2uint_rn(layers_dc[p.layer].mua*layers_dc[p.layer].mutr*__uint2float_rn(p.weight));
+//			p.weight -= w_temp;
+//
+//
+//			//w = __float2uint_rn(layers_dc[p.layer].mua*layers_dc[p.layer].mutr*__uint2float_rn(p.weight));
+//			//p.weight -= w;
+//
+//			if (ignoreAdetection == 0) // Evaluated at compiletime!
+//			{
+//				index = (min(__float2int_rz(__fdividef(p.z, det_dc[0].dz)), (int)det_dc[0].nz - 1)*det_dc[0].nr + min(__float2int_rz(__fdividef(sqrtf(p.x*p.x + p.y*p.y), det_dc[0].dr)), (int)det_dc[0].nr - 1));
+//				if (index == index_old)
+//				{
+//					w += w_temp;
+//					//p.weight -= __float2uint_rn(layers_dc[p.layer].mua*layers_dc[p.layer].mutr*__uint2float_rn(p.weight)); 
+//				}
+//				else// if(w!=0)
+//				{
+//					AtomicAddULL(&DeviceMem.A_rz[index_old], w);
+//					index_old = index;
+//					w = w_temp;
+//				}
+//
+//			}
+//
+//			Spin(&p, &x, &a, layers_dc[p.layer].g);
+//		}
+//
+//
+//
+//
+//		if (!PhotonSurvive(&p, &x, &a)) // Check if photons survives or not
+//		{
+//			if (atomicAdd(DeviceMem.num_terminated_photons, 1u) < (*num_photons_dc))
+//			{	// Ok to launch another photon
+//				LaunchPhoton(&p);//Launch a new photon
+//			}
+//			else
+//			{	// No more photons should be launched. 
+//				DeviceMem.thread_active[DataPos] = 0u; // Set thread to inactive
+//				ii = NUMSTEPS_GPU;				// Exit main loop
+//			}
+//
+//		}
+//	}//end main for loop!
+//	if (ignoreAdetection == 1 && w != 0)
+//		AtomicAddULL(&DeviceMem.A_rz[index_old], w);
+//
+//	__syncthreads();//necessary?
+//
+//	//save the state of the MC simulation in global memory before exiting
+//	DeviceMem.p[DataPos] = p;	//This one is incoherent!!!
+//	DeviceMem.x[DataPos] = x; //this one also seems to be coherent
+//
+//
+//}//end MCd
 template <int ignoreAdetection> __global__ void CalcMCGPU(MemStruct DeviceMem)
 {
+	
 	//Block index
 	int bx = blockIdx.x;
 
@@ -201,7 +238,7 @@ template <int ignoreAdetection> __global__ void CalcMCGPU(MemStruct DeviceMem)
 	unsigned long long int x = DeviceMem.x[begin + tx];	//coherent
 	unsigned int a = DeviceMem.a[begin + tx];			//coherent
 	dsh_sPhoton[tx] = DeviceMem.p[begin + tx];
-	float s; //step length
+	
 	
 
 	unsigned int index, index_old;
@@ -214,36 +251,38 @@ template <int ignoreAdetection> __global__ void CalcMCGPU(MemStruct DeviceMem)
 	//First, make sure the thread (photon) is active
 	unsigned int ii = 0;
 
-
+	DeviceMem.check[tx].c = 1.0;
 	for (; ii<NUMSTEPS_GPU; ii++) //this is the main while loop
 	{
+		DeviceMem.check[tx].c = 0.0;
 		// Rand Make
 		// 桁あふれ出ないか確認
 		if (layers_dc[dsh_sPhoton[tx].layer].mutr != FLT_MAX){
 			// 乱数による距離生成
-			s = -__logf(rand_MWC_oc(&x, &a))*layers_dc[dsh_sPhoton[tx].layer].mutr;	//sample step length [cm] //HERE AN OPEN_OPEN FUNCTION WOULD BE APPRECIATED
+			dsh_sPhoton[tx].s = -__logf(rand_MWC_oc(&x, &a))*layers_dc[dsh_sPhoton[tx].layer].mutr;	//sample step length [cm] //HERE AN OPEN_OPEN FUNCTION WOULD BE APPRECIATED
 		}else{
 			// 一時的に100 cm代入
-			s = 100.0f;															//temporary, say the step in glass is 100 cm.
+			dsh_sPhoton[tx].s = 100.0f;															//temporary, say the step in glass is 100 cm.
 		}
+		
 		// Hop_Drop() mcml_go
 		//Check for layer transitions and in case, calculate s
 		new_layer = dsh_sPhoton[tx].layer;
 		// 現在のレイヤーよりも上に移動してるかを確認
-		if (dsh_sPhoton[tx].z + s*dsh_sPhoton[tx].dz<layers_dc[dsh_sPhoton[tx].layer].z_min){
+		if (dsh_sPhoton[tx].z + dsh_sPhoton[tx].s*dsh_sPhoton[tx].dz<layers_dc[dsh_sPhoton[tx].layer].z_min){
 			new_layer--; 
-			s = __fdividef(layers_dc[dsh_sPhoton[tx].layer].z_min - dsh_sPhoton[tx].z, dsh_sPhoton[tx].dz); 
+			dsh_sPhoton[tx].s = __fdividef(layers_dc[dsh_sPhoton[tx].layer].z_min - dsh_sPhoton[tx].z, dsh_sPhoton[tx].dz);
 		} //Check for upwards reflection/transmission & calculate new s
 		// 現在のレイヤーよりも下に移動してるかを確認
-		if (dsh_sPhoton[tx].z + s*dsh_sPhoton[tx].dz>layers_dc[dsh_sPhoton[tx].layer].z_max){
+		if (dsh_sPhoton[tx].z + dsh_sPhoton[tx].s*dsh_sPhoton[tx].dz>layers_dc[dsh_sPhoton[tx].layer].z_max){
 			new_layer++;
-			s = __fdividef(layers_dc[dsh_sPhoton[tx].layer].z_max - dsh_sPhoton[tx].z, dsh_sPhoton[tx].dz); 
+			dsh_sPhoton[tx].s = __fdividef(layers_dc[dsh_sPhoton[tx].layer].z_max - dsh_sPhoton[tx].z, dsh_sPhoton[tx].dz); 
 		} //Check for downward reflection/transmission
 
 		// 位置を代入
-		dsh_sPhoton[tx].x += dsh_sPhoton[tx].dx*s;
-		dsh_sPhoton[tx].y += dsh_sPhoton[tx].dy*s;
-		dsh_sPhoton[tx].z += dsh_sPhoton[tx].dz*s;
+		dsh_sPhoton[tx].x += dsh_sPhoton[tx].dx*dsh_sPhoton[tx].s;
+		dsh_sPhoton[tx].y += dsh_sPhoton[tx].dy*dsh_sPhoton[tx].s;
+		dsh_sPhoton[tx].z += dsh_sPhoton[tx].dz*dsh_sPhoton[tx].s;
 //		Hop(&dsh_sPhoton[tx],s);
 		if (dsh_sPhoton[tx].z > layers_dc[dsh_sPhoton[tx].layer].z_max){
 			dsh_sPhoton[tx].z = layers_dc[dsh_sPhoton[tx].layer].z_max;//needed?
@@ -251,17 +290,17 @@ template <int ignoreAdetection> __global__ void CalcMCGPU(MemStruct DeviceMem)
 		if (dsh_sPhoton[tx].z < layers_dc[dsh_sPhoton[tx].layer].z_min){
 			dsh_sPhoton[tx].z = layers_dc[dsh_sPhoton[tx].layer].z_min;//needed?
 		}
-		//　レイヤー変化していた場合
-		dsh_sPhoton[tx].rr = new_layer;
-
+		
 		if (new_layer != dsh_sPhoton[tx].layer)
 		{
 			// set the remaining step length to 0
-			s = 0.0f;
-
+			dsh_sPhoton[tx].s = 0.0f;
+			
+			DeviceMem.check[tx].c = 1.0;
 			// 反射するか確認
 			if (Reflect(&dsh_sPhoton[tx], new_layer, &x, &a) == 0u)//Check for reflection
 			{ 
+				DeviceMem.check[tx].c = 2.0;
 				// Photon is transmitted　光子が伝達
 				if (new_layer == 0)
 				{	// Diffuse reflectance　拡散反射
@@ -269,25 +308,31 @@ template <int ignoreAdetection> __global__ void CalcMCGPU(MemStruct DeviceMem)
 //					index = __float2int_rz(acosf(-dsh_sPhoton[tx].dz)*2.0f*RPI*det_dc[0].na)*det_dc[0].nr + min(__float2int_rz(__fdividef(sqrtf(dsh_sPhoton[tx].x*dsh_sPhoton[tx].x + dsh_sPhoton[tx].y*dsh_sPhoton[tx].y), det_dc[0].dr)), (int)det_dc[0].nr - 1);
 					index = __float2int_rz(__fdividef(acosf(-dsh_sPhoton[tx].dz) , (PI / det_dc[0].na)))*det_dc[0].nr + min(__float2int_rz(__fdividef(__fsqrt_rz(dsh_sPhoton[tx].x*dsh_sPhoton[tx].x + dsh_sPhoton[tx].y*dsh_sPhoton[tx].y), det_dc[0].dr)), (int)det_dc[0].nr - 1);
 					AtomicAddULL(&DeviceMem.Rd_ra[index], dsh_sPhoton[tx].weight);
-					dsh_sPhoton[tx].weight = 0;
+					
 //					RecordR(dsh_sPhoton[tx]->rr, DeviceMem.In_Ptr, &dsh_sPhoton[tx], DeviceMem.Out_Ptr);//rをどうやって持ってくればいいのか
+					DeviceMem.check[tx].c = 3.0;
 					RemodelRecordR(DeviceMem, &dsh_sPhoton[tx]);
+					DeviceMem.check[tx].w = dsh_sPhoton[tx].weight;
+					dsh_sPhoton[tx].weight = 0;
 				}
 				if (new_layer > *n_layers_dc)
 				{	//Transmitted　透過
 					index = __float2int_rz(__fdividef(acosf(dsh_sPhoton[tx].dz), (PI / det_dc[0].na)))*det_dc[0].nr + min(__float2int_rz(__fdividef(__fsqrt_rz(dsh_sPhoton[tx].x*dsh_sPhoton[tx].x + dsh_sPhoton[tx].y*dsh_sPhoton[tx].y), det_dc[0].dr)), (int)det_dc[0].nr - 1);
 					AtomicAddULL(&DeviceMem.Tt_ra[index], dsh_sPhoton[tx].weight);
+					
+					DeviceMem.check[tx].c = 4.0;
+					DeviceMem.check[tx].w = dsh_sPhoton[tx].weight;
 					dsh_sPhoton[tx].weight = 0;
 				}
 			}
 		}
 		//w=0;
-		if (s > 0.0f)
+		if (dsh_sPhoton[tx].s > 0.0f)
 		{
 			// Drop weight (apparently only when the photon is scattered) 光子の質量減少
 			w_temp = __float2uint_rn(layers_dc[dsh_sPhoton[tx].layer].mua*layers_dc[dsh_sPhoton[tx].layer].mutr*__uint2float_rn(dsh_sPhoton[tx].weight));
 			dsh_sPhoton[tx].weight -= w_temp;
-
+			DeviceMem.check[tx].c = 5.0;
 			if (ignoreAdetection == 0) // Evaluated at compiletime!
 			{
 				index = (min(__float2int_rz(__fdividef(dsh_sPhoton[tx].z, det_dc[0].dz)), (int)det_dc[0].nz - 1)*det_dc[0].nr + min(__float2int_rz(__fdividef(sqrtf(dsh_sPhoton[tx].x*dsh_sPhoton[tx].x + dsh_sPhoton[tx].y*dsh_sPhoton[tx].y), det_dc[0].dr)), (int)det_dc[0].nr - 1));
@@ -310,7 +355,7 @@ template <int ignoreAdetection> __global__ void CalcMCGPU(MemStruct DeviceMem)
 
 
 
-		if (!PhotonSurvive(&dsh_sPhoton[tx], &x, &a)) // Check if photons survives or not
+		if (!PhotonSurvive(&dsh_sPhoton[tx], &x, &a)==1u) // Check if photons survives or not
 		{
 			DeviceMem.thread_active[begin + tx] = 1;
 			LaunchPhoton(&dsh_sPhoton[tx]);
@@ -321,38 +366,15 @@ template <int ignoreAdetection> __global__ void CalcMCGPU(MemStruct DeviceMem)
 		AtomicAddULL(&DeviceMem.A_rz[index_old], w);
 
 	__syncthreads();//necessary?
-
+	
 	DeviceMem.x[begin + tx] = x; //this one also seems to be coherent
 	DeviceMem.p[begin + tx] = dsh_sPhoton[tx]; //this one also seems to be coherent
 
 
 }//end MCd
 
-__device__  void LaunchPhoton(LayerStruct  * Layerspecs_Ptr,
-	PhotonStruct* p,
-	OutStruct    * Out_Ptr,
-	SimulationStruct  * sim)
-{
-	// We are currently not using the RNG but might do later
-	//float input_fibre_radius = 0.03;//[cm]
-	//p->x=input_fibre_radius*sqrtf(rand_MWC_co(x,a));
 
-	p->dead = 0;
-	p->layer = 1;
-	p->s = 0;
-	p->sleft = 0;
 
-	p->x = 0.0f;
-	p->y = 0.0f;
-	p->z = 0.0f;
-	p->dx = 0.0f;
-	p->dy = 0.0f;
-	p->dz = 1.0f;
-
-	p->layer = 1;
-	p->weight = *start_weight_dc; //specular reflection!
-
-}
 __device__  void LaunchPhoton(PhotonStruct* p)
 {
 
@@ -524,51 +546,61 @@ __device__ unsigned int Reflect(PhotonStruct* p, int new_layer, unsigned long lo
 	if (n1 == n2)//refraction index matching automatic transmission and no direction change
 	{
 		p->layer = new_layer;
+		
 		return 0u;
 	}
 
-	if (n1>n2 && n2*n2<n1*n1*(1 - cos_angle_i*cos_angle_i))//total internal reflection, no layer change but z-direction mirroring
+	if (n1>n2 && n2/n1<sqrtf(1 - cos_angle_i*cos_angle_i))//total internal reflection, no layer change but z-direction mirroring
 	{
 		p->dz *= -1.0f;
+		
 		return 1u;
 	}
 
 	if (cos_angle_i == 1.0f)//normal incident
 	{
 		r = __fdividef((n1 - n2), (n1 + n2));
+		p->rr = r;
+		
 		if (rand_MWC_co(x, a) <= r*r)
 		{
 			//reflection, no layer change but z-direction mirroring
 			p->dz *= -1.0f;
+			
 			return 1u;
 		}
 		else
 		{	//transmission, no direction change but layer change
 			p->layer = new_layer;
+			
 			return 0u;
 		}
 	}
 	else
 	{
 		//long and boring calculations of r
-		float sinangle_i = sqrtf(1.0f - p->dz*p->dz);
+		float sinangle_i = sqrtf(1.0f - cos_angle_i*cos_angle_i);
 		float sinangle_e = n1/n2*sinangle_i;
 		float cosangle_e = sqrtf(1.0f - sinangle_e*sinangle_e);
-
-		float cossumangle = (p->dz*cosangle_e) - sinangle_i*sinangle_e;
-		float cosdiffangle = (p->dz*cosangle_e) + sinangle_i*sinangle_e;
-		float sinsumangle = sinangle_i*cosangle_e + (p->z*sinangle_e);
-		float sindiffangle = sinangle_i*cosangle_e - (p->z*sinangle_e);
-
+		
+		float cossumangle = (cos_angle_i*cosangle_e) - sinangle_i*sinangle_e;
+		float cosdiffangle = (cos_angle_i*cosangle_e) + sinangle_i*sinangle_e;
+		float sinsumangle = sinangle_i*cosangle_e + (cos_angle_i*sinangle_e);
+		float sindiffangle = sinangle_i*cosangle_e - (cos_angle_i*sinangle_e);
+		
 		r = 0.5*sindiffangle*sindiffangle*__fdividef((cosdiffangle*cosdiffangle + cossumangle*cossumangle), (sinsumangle*sinsumangle*cosdiffangle*cosdiffangle));
+		//gives almost exactly the same results as the old MCML way of doing the calculation but does it slightly faster
+		// save a few multiplications, calculate cos_angle_i^2;
+		//float e = __fdividef(n1*n1, n2*n2)*(1.0f - cos_angle_i*cos_angle_i); //e is the sin square of the transmission angle
+		//r = 2 * sqrtf((1.0f - cos_angle_i*cos_angle_i)*(1.0f - e)*e*cos_angle_i*cos_angle_i);//use r as a temporary variable
+		//e = e + (cos_angle_i*cos_angle_i)*(1.0f - 2.0f*e);//Update the value of e
+		//r = e*__fdividef((1.0f - e - r), ((1.0f - e + r)*(e + r)));//Calculate r	
+		p->rr = r;
 
 	}
-	//gives almost exactly the same results as the old MCML way of doing the calculation but does it slightly faster
-	// save a few multiplications, calculate cos_angle_i^2;
-	//float e = __fdividef(n1*n1, n2*n2)*(1.0f - cos_angle_i*cos_angle_i); //e is the sin square of the transmission angle
-	//r = 2 * sqrtf((1.0f - cos_angle_i*cos_angle_i)*(1.0f - e)*e*cos_angle_i*cos_angle_i);//use r as a temporary variable
-	//e = e + (cos_angle_i*cos_angle_i)*(1.0f - 2.0f*e);//Update the value of e
-	//r = e*__fdividef((1.0f - e - r), ((1.0f - e + r)*(e + r)));//Calculate r	
+	
+	
+	p->sleft = p->dz;
 
 	if (rand_MWC_co(x, a) <= r)
 	{
@@ -587,7 +619,7 @@ __device__ unsigned int Reflect(PhotonStruct* p, int new_layer, unsigned long lo
 		p->layer = new_layer;
 		return 0u;
 	}
-	p->rr = r;
+	
 }
 __device__ unsigned int PhotonSurvive(PhotonStruct* p, unsigned long long* x, unsigned int* a)
 {	//Calculate wether the photon survives (returns 1) or dies (returns 0)
@@ -631,36 +663,36 @@ cCUDAMCML::cCUDAMCML(){
 }
 cCUDAMCML::~cCUDAMCML(){
 }
-void cCUDAMCML::RunOldCarnel(){
-	dim3 dimGrid(NUM_GRID_PER_BLOCK);
-	dim3 dimBlock(NUM_THREADS_PER_BLOCK);
-	unsigned int threads_active_total = 1;
-	int i = 0;
-	while (*m_sHostMem.num_terminated_photons < m_simulations->number_of_photons)
-	{
-		i++;
-		//run the kernel
-		if (m_simulations->ignoreAdetection == 1){
-			MCd<1> << <dimGrid, dimBlock >> >(m_sDeviceMem);
-		}
-		else{
-			MCd<0> << <dimGrid, dimBlock >> >(m_sDeviceMem);
-		}
-		cudaThreadSynchronize(); // Wait for all threads to finish
-		cudaError_t cudastat = cudaGetLastError(); // Check if there was an error
-
-		// Copy thread_active from device to host
-		cudaMemcpy(m_sHostMem.thread_active, m_sDeviceMem.thread_active, NUM_THREADS*sizeof(unsigned int), cudaMemcpyDeviceToHost);
-		threads_active_total = 0;
-		for (int ii = 0; ii < NUM_THREADS; ii++){
-			threads_active_total += m_sHostMem.thread_active[ii];
-		}
-
-		cudaMemcpy(m_sHostMem.num_terminated_photons, m_sDeviceMem.num_terminated_photons, sizeof(unsigned int), cudaMemcpyDeviceToHost);
-		cudaMemcpy(m_sHostMem.p, m_sDeviceMem.p, sizeof(PhotonStruct)*m_simulations->number_of_photons, cudaMemcpyDeviceToHost);
-	}
-	CopyDeviceToHostMem(&m_sHostMem, &m_sDeviceMem, m_simulations);
-}
+//void cCUDAMCML::RunOldCarnel(){
+//	dim3 dimGrid(NUM_GRID_PER_BLOCK);
+//	dim3 dimBlock(NUM_THREADS_PER_BLOCK);
+//	unsigned int threads_active_total = 1;
+//	int i = 0;
+//	while (*m_sHostMem.num_terminated_photons < m_simulations->number_of_photons)
+//	{
+//		i++;
+//		//run the kernel
+//		if (m_simulations->ignoreAdetection == 1){
+//			MCd<1> << <dimGrid, dimBlock >> >(m_sDeviceMem);
+//		}
+//		else{
+//			MCd<0> << <dimGrid, dimBlock >> >(m_sDeviceMem);
+//		}
+//		cudaThreadSynchronize(); // Wait for all threads to finish
+//		cudaError_t cudastat = cudaGetLastError(); // Check if there was an error
+//
+//		// Copy thread_active from device to host
+//		cudaMemcpy(m_sHostMem.thread_active, m_sDeviceMem.thread_active, NUM_THREADS*sizeof(unsigned int), cudaMemcpyDeviceToHost);
+//		threads_active_total = 0;
+//		for (int ii = 0; ii < NUM_THREADS; ii++){
+//			threads_active_total += m_sHostMem.thread_active[ii];
+//		}
+//
+//		cudaMemcpy(m_sHostMem.num_terminated_photons, m_sDeviceMem.num_terminated_photons, sizeof(unsigned int), cudaMemcpyDeviceToHost);
+//		cudaMemcpy(m_sHostMem.p, m_sDeviceMem.p, sizeof(PhotonStruct)*m_simulations->number_of_photons, cudaMemcpyDeviceToHost);
+//	}
+//	CopyDeviceToHostMem(&m_sHostMem, &m_sDeviceMem, m_simulations);
+//}
 // 計算の中枢
 int cCUDAMCML::MakeRandTableDev(){
 	curandState *devStates;
@@ -729,11 +761,15 @@ int cCUDAMCML::DoOneSimulation(SimulationStruct* simulation)
 	dim3 dimNumBlock(NUM_GRID_PER_BLOCK);
 	dim3 dimNumThread(NUM_THREADS_PER_BLOCK);
 	int TotalP = 0;
-	while (TotalP<simulation->number_of_photons){
+	//ReflectTest<<<dimNumBlock,dimNumThread>>>(m_sDeviceMem);
+	
+	while (TotalP<simulation->number_of_photons)
+	{
+		
 		//run the kernel
 		if (simulation->ignoreAdetection == 1){
 			CalcMCGPU<1> << < dimNumBlock, dimNumThread >> >(m_sDeviceMem);
-	
+			
 		}
 		else{
 			CalcMCGPU<0> << < dimNumBlock, dimNumThread >> >(m_sDeviceMem);
@@ -743,22 +779,40 @@ int cCUDAMCML::DoOneSimulation(SimulationStruct* simulation)
 		if (cudastat){
 			return _ERR_GPU_SIM_MCML_;
 		}
+
+	
+
 		// 検証用
 		cudastat = cudaMemcpy(m_sHostMem.p, m_sDeviceMem.p, NUM_THREADS * sizeof(PhotonStruct), cudaMemcpyDeviceToHost);
 		cudastat = cudaMemcpy(m_sHostMem.x, m_sDeviceMem.x, NUM_THREADS * sizeof(unsigned long  long), cudaMemcpyDeviceToHost);
 		cudastat = cudaMemcpy(m_sHostMem.a, m_sDeviceMem.a, NUM_THREADS * sizeof(unsigned int ), cudaMemcpyDeviceToHost);
 		cudastat = cudaMemcpy(m_sHostMem.thread_active, m_sDeviceMem.thread_active, NUM_THREADS * sizeof(unsigned int), cudaMemcpyDeviceToHost);
 		cudastat = cudaMemcpy(m_sHostMem.num_terminated_photons, m_sDeviceMem.num_terminated_photons,sizeof(unsigned int), cudaMemcpyDeviceToHost);
+		cudastat = cudaMemcpy(m_sHostMem.check, m_sDeviceMem.check, NUM_THREADS * sizeof(CheckStruct), cudaMemcpyDeviceToHost);
 		//	cudaThreadSynchronize();		// Wait for all threads to finish
 		// 
 		cudastat = cudaGetLastError(); // Check if there was an error
 		if (cudastat){
 			return _ERR_GPU_SIM_MEMCPY_;
 		}
+		std::ofstream ofs("text.csv");
+		for (int i = 0; i < NUM_THREADS; i++){
+			ofs << m_sHostMem.p[i].dz<<",";
+			ofs << m_sHostMem.p[i].dead << ",";
+			ofs << m_sHostMem.p[i].sleft << ",";
+			ofs << m_sHostMem.p[i].rr << std::endl;
+		}
+		int x = 0;
 		for (int i = 0; i < NUM_THREADS; i++){
 			if (m_sHostMem.thread_active[i] != 65535){
 				TotalP += m_sHostMem.thread_active[i];
 			}
+	
+			if (m_sHostMem.p[i].rr != 0){
+				 x++;
+				
+				 }
+			
 		}
 	}
 
@@ -800,7 +854,7 @@ int cCUDAMCML::InitMallocMem(SimulationStruct* sim){
 	if (tmp != cudaSuccess) {
 		State |= 0x40;
 	}
-	unsigned int rz_size =  sim->GetRzSize(); 
+	unsigned int rz_size = sim->GetRzSize(); 
 	unsigned int ra_size = sim->GetRaSize(); 
 	tmp = cudaMalloc((void**)&m_sDeviceMem.A_rz, rz_size *sizeof(unsigned long long));
 	if (tmp != cudaSuccess) {
@@ -816,6 +870,11 @@ int cCUDAMCML::InitMallocMem(SimulationStruct* sim){
 	}
 
 	tmp = cudaMalloc((void**)&m_sDeviceMem.sim, sizeof(SimulationStruct));
+	if (tmp != cudaSuccess) {
+		State |= 0x400;
+	}
+
+	tmp = cudaMalloc((void**)&m_sDeviceMem.check, NUM_THREADS*sizeof(CheckStruct));
 	if (tmp != cudaSuccess) {
 		State |= 0x400;
 	}
@@ -901,8 +960,11 @@ int cCUDAMCML::InitMallocMem(SimulationStruct* sim){
 //	if (tmp != cudaSuccess) {
 //		State |= 0x20000;
 //	}
+	
 	cudaMemcpy(m_sDeviceMem.Out_Ptr, &m_sOutStruct, sizeof(OutStruct), cudaMemcpyHostToDevice);
-
+	
+	
+	
 
 	// Allocate p on the device!!
 	// Allocate A_rz on host and device
@@ -966,7 +1028,10 @@ int cCUDAMCML::InitMallocMem(SimulationStruct* sim){
 	if (m_sHostMem.sim == NULL){
 		State |= 0x0080000000;
 	}
-	
+	m_sHostMem.check = new CheckStruct[ NUM_THREADS];
+	if (m_sHostMem.check == NULL){
+		State |= 0x0100000000;
+	}
 
 	return State ;
 }
@@ -977,14 +1042,13 @@ void cCUDAMCML::CopyDeviceToHostMem(MemStruct* HostMem, MemStruct* DeviceMem, Si
 	int ra_size = sim->det.nr*sim->det.na;
 	cudaError_t tmp;
 	// Copy A_rz, Rd_ra and Tt_ra
-	cudaMemcpy(HostMem->A_rz, DeviceMem->A_rz, rz_size*sizeof(unsigned long long), cudaMemcpyDeviceToHost);
-	cudaMemcpy(HostMem->Rd_ra, DeviceMem->Rd_ra, ra_size*sizeof(unsigned long long), cudaMemcpyDeviceToHost);
-	cudaMemcpy(HostMem->Tt_ra, DeviceMem->Tt_ra, ra_size*sizeof(unsigned long long), cudaMemcpyDeviceToHost);
-
+	tmp=cudaMemcpy(HostMem->A_rz, DeviceMem->A_rz, rz_size*sizeof(unsigned long long), cudaMemcpyDeviceToHost);
+	tmp=cudaMemcpy(HostMem->Rd_ra, DeviceMem->Rd_ra, ra_size*sizeof(unsigned long long), cudaMemcpyDeviceToHost);
+	tmp=cudaMemcpy(HostMem->Tt_ra, DeviceMem->Tt_ra, ra_size*sizeof(unsigned long long), cudaMemcpyDeviceToHost);
+	tmp=cudaMemcpy(HostMem->check, DeviceMem->check, NUM_THREADS*sizeof(CheckStruct), cudaMemcpyDeviceToHost);
+	tmp=cudaMemcpy(HostMem->Out_Ptr->Rd_ra,m_sOutStruct.Rd_ra, ra_size*sizeof(double), cudaMemcpyDeviceToHost);
+	tmp=cudaMemcpy(HostMem->Out_Ptr->Rd_p, m_sOutStruct.Rd_p, ra_size*sizeof(double), cudaMemcpyDeviceToHost);
 	
-	cudaMemcpy(HostMem->Out_Ptr->Rd_ra,m_sOutStruct.Rd_ra, ra_size*sizeof(double), cudaMemcpyDeviceToHost);
-	cudaMemcpy(HostMem->Out_Ptr->Rd_p, m_sOutStruct.Rd_p, ra_size*sizeof(double), cudaMemcpyDeviceToHost);
-
 	//Also copy the state of the RNG's
 	cudaMemcpy(HostMem->p, DeviceMem->p, NUM_THREADS *sizeof(PhotonStruct), cudaMemcpyDeviceToHost);
 	tmp = cudaMemcpy(HostMem->Out_Ptr->opl, m_sOutStruct.opl, sizeof(double), cudaMemcpyDeviceToHost);
@@ -1182,12 +1246,27 @@ int cCUDAMCML::InitContentsMem(SimulationStruct* sim)
 	HostMem->p->dz = 0;
 	HostMem->p->weight = 0;
 	HostMem->p->layer = 0;
+	HostMem->p->Index = 0;
+	HostMem->p->dead = 0;
+	HostMem->p->sleft = 0;
 
+	HostMem->p->rr = 0;
 	tmp = cudaMemset(DeviceMem->p, 0, NUM_THREADS *sizeof(int));
 	if (tmp != cudaSuccess) {
 		State |= 0x40;
 	}
+	
+	for (int i = 0; i < NUM_THREADS; i++){
+		HostMem->check[i].c = 0.0;
+		HostMem->check[i].w = 0.0;
+	}
 
+
+
+	tmp = cudaMemcpy(DeviceMem->check, HostMem->check, NUM_THREADS *sizeof(CheckStruct),cudaMemcpyHostToDevice);
+	if (tmp != cudaSuccess) {
+		State |= 0x1000;
+	}
 	tmp = cudaMemcpy(DeviceMem->x, HostMem->x, NUM_THREADS *sizeof(unsigned long long), cudaMemcpyHostToDevice);
 	if (tmp != cudaSuccess) {
 		State |= 0x80;
@@ -1241,7 +1320,9 @@ void cCUDAMCML::FreeMemStructs(MemStruct* HostMem, MemStruct* DeviceMem)
 	cudaFree(m_sOutStruct.L);
 	cudaFree(m_sOutStruct.OPL);
 	cudaFree(m_sOutStruct.opl);
+	cudaFree(DeviceMem->check);
 	
+
 	delete[] HostMem->p;
 	delete[] HostMem->x;
 	delete[] HostMem->a;
@@ -1256,6 +1337,7 @@ void cCUDAMCML::FreeMemStructs(MemStruct* HostMem, MemStruct* DeviceMem)
 	delete[] HostMem->Out_Ptr->L;
 	delete[] HostMem->Out_Ptr->OPL;
 	delete[] HostMem->Out_Ptr->opl;
+	delete[] HostMem->check;
 }
 
 void cCUDAMCML::FreeSimulationStruct(SimulationStruct* sim, int nRun)
@@ -1323,10 +1405,12 @@ extern "C"{
 		short	 l;
 		int	 n = Out_Ptr->p1;
 		int id;
+		
 
 		r = sqrt(x*x + y*y);
 
 		if (r >= r1 && r <= (r1 + 0.1*r1))
+
 		{
 			if (y >= 0)
 				t1 = atan2(y, x) * 180 / PI;
@@ -1352,8 +1436,8 @@ extern "C"{
 			if (iad > sim->na - 1) ia = sim->na - 1;
 			else ia = iad;
 
-			Out_Ptr->Rd_ra[sim->nr*ia + it] += p->weight*(1.0 - Refl);		/* 各天頂角・各方位角の光子ウェイトの記録 */
-			Out_Ptr->Rd_p[sim->nr*ia + it] += 1;							/* 各天頂角・各方位角の光子数の記録 */
+			Out_Ptr->Rd_ra[sim->nr*it + ia] += p->weight*(1.0 - Refl);		/* 各天頂角・各方位角の光子ウェイトの記録 */
+			Out_Ptr->Rd_p[sim->nr*it + ia] += 1;							/* 各天頂角・各方位角の光子数の記録 */
 			Out_Ptr->P += p->weight*(1.0 - Refl);
 
 			for (l = 1; l <= nl; l++)
@@ -1445,8 +1529,9 @@ extern "C"{
 		Out_Ptr->OPL = AllocVector(0, nl + 1);
 		Out_Ptr->L = AllocVector(0, nl + 1);
 		Out_Ptr->opl = AllocVector(0, nl + 1);
+		ReportResult(sim,*Out_Ptr);
 	}
-	void ReportResult(SimulationStruct sim, OutStruct Out_Parm)
+	__host__ __device__ void ReportResult(SimulationStruct sim, OutStruct Out_Parm)
 	{
 		char time_report[STR_LEN];
 

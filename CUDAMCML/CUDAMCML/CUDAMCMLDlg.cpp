@@ -356,6 +356,7 @@ int cMCML::WriteSimRslts(MemStruct* HostMem, SimulationStruct* sim)
 	}
 	cOutputFile.WriteString(_T("\nStartWeight \n"));
 	
+	
 
 	WriteOPL(&cOutputFile);
 	WriteRd_p(&cOutputFile);
@@ -454,11 +455,11 @@ CString cMCML::ReadSimData(CString* filename, SimulationStruct** simulations, in
 			return cstrStatus;
 		}
 
-		// Med レイヤーの保存
+		// 空気層の保存
 		unsigned int tmpuiMed = 0;
 		cInputFileIO.ReadFile1UInt( &tmpuiMed);
-		(*simulations)[nLoop].layers[0].n = (float)tmpuiMed;
-		(*simulations)[nLoop].layers[0].g = 0;
+		(*simulations)[nLoop].layers[0].n = 1.0;
+		(*simulations)[nLoop].layers[0].g = 0.9;
 		(*simulations)[nLoop].layers[0].z_min = -9999.9;
 		(*simulations)[nLoop].layers[0].z_max = 0.00;
 
@@ -636,13 +637,15 @@ CString cMCML::StartSim(CString* chPathName, int nPathName, CString* cstrB32Name
 		// フォトンの分割数に基づいて繰り返し
 		auto Start = std::chrono::system_clock::now();
 		InitOutput();
+		
 		for (int nDivNum = 0; nDivNum < m_simulations[nRun].nDivedSimNum; nDivNum++){
 		int	 RunStatus = MakeRandTableDev();
 			 RunStatus = InitPhoton();		
-		
+			 
 			// Run a simulation
 			RunStatus = DoOneSimulation(&m_simulations[nRun]);
-
+			
+			
 			// cCUDAMCML::RunOldCarnel();
 
 			if (RunStatus != 0){

@@ -47,15 +47,16 @@
 
 
 
-#define NUMSTEPS_GPU 100
+#define NUMSTEPS_GPU 1000
 #define PI 3.141592654f
 #define RPI 0.318309886f // Pi Rad
 #define MAX_LAYERS 100
 #define STR_LEN 200
 #define Boolean char
 
-//#define WEIGHT 0.0001f
+#define WEIGHT 0.0001f
 #define WEIGHTI 429497u //0xFFFFFFFFu*WEIGHT
+
 #define CHANCE 0.1f
 //__host__ _Check_return_ _CRT_JIT_INTRINSIC _CRTIMP int __cdecl toupper(_In_ int _C);
 
@@ -107,6 +108,7 @@ __host__ __device__ struct OutStruct{
 	unsigned long long	    p1;
 	/* reflectance. [1/(cm2 sr)] */
 };
+
 __host__ __device__ struct PhotonStruct{
 	float x;		// Global x coordinate [cm]
 	float y;		// Global y coordinate [cm]
@@ -117,10 +119,10 @@ __host__ __device__ struct PhotonStruct{
 	unsigned long long weight;			// Photon weight
 	int layer;				// Current layer
 	unsigned long long Index;
-
-	Boolean dead;		/* 1 if photon is terminated. */
+	double dead;		/* 1 if photon is terminated. */
 	float s;			/* current step size. [cm]. sourceÇÃ46çsÇ…Ç†ÇÈÇÃÇ≈ÇÕ*/
 	float sleft;		/* step size left. dimensionless [-]. ïKóvÇ©ÇÌÇ©ÇÁÇ»Ç¢*/
+	           //É`ÉFÉbÉNóp
 
 	double rr;
 	__device__ __host__ PhotonStruct& PhotonStruct::operator =(const PhotonStruct& b){
@@ -132,6 +134,11 @@ __host__ __device__ struct PhotonStruct{
 		this->z = b.z;
 		this->layer = b.layer;
 		this->weight = b.weight;
+		this->rr = b.rr;
+		
+		this->s = b.s;
+		this->sleft = b.sleft;
+		this->dead = b.dead;
 	}
 };
 __host__ __device__ struct PhotonStructForShared{	// MCMLédólÇ…â¸ë¢Ç∑ÇÈÇ∆ÉVÉFÉAÅ[ÉhÉÅÉÇÉäÇ™ïsë´ÇµÉrÉãÉhÇ™í ÇÁÇ»Ç¢ÇÃÇ≈êÍópÇÃå^ÇçÃóp
@@ -144,6 +151,12 @@ __host__ __device__ struct PhotonStructForShared{	// MCMLédólÇ…â¸ë¢Ç∑ÇÈÇ∆ÉVÉFÉAÅ
 	unsigned long long weight;			// Photon weight
 	int layer;				// Current layer
 	unsigned long long Index;
+	Boolean dead;		/* 1 if photon is terminated. */
+	float s;			/* current step size. [cm]. sourceÇÃ46çsÇ…Ç†ÇÈÇÃÇ≈ÇÕ*/
+	float sleft;		/* step size left. dimensionless [-]. ïKóvÇ©ÇÌÇ©ÇÁÇ»Ç¢*/
+	           //É`ÉFÉbÉNóp
+	double rr;
+
 	__device__ __host__ PhotonStructForShared& PhotonStructForShared::operator =(const PhotonStructForShared& b){
 		this->dx = b.dx;
 		this->dy = b.dy;
@@ -153,6 +166,11 @@ __host__ __device__ struct PhotonStructForShared{	// MCMLédólÇ…â¸ë¢Ç∑ÇÈÇ∆ÉVÉFÉAÅ
 		this->z = b.z;
 		this->layer = b.layer;
 		this->weight = b.weight;
+		this->rr = b.rr;
+		
+		this->s = b.s;
+		this->sleft = b.sleft;
+		this->dead = b.dead;
 	}
 	__device__ __host__ PhotonStructForShared& PhotonStructForShared::operator =(const PhotonStruct& b){
 		this->dx = b.dx;
@@ -163,6 +181,11 @@ __host__ __device__ struct PhotonStructForShared{	// MCMLédólÇ…â¸ë¢Ç∑ÇÈÇ∆ÉVÉFÉAÅ
 		this->z = b.z;
 		this->layer = b.layer;
 		this->weight = b.weight;
+		this->rr = b.rr;
+		
+		this->s = b.s;
+		this->sleft = b.sleft;
+		this->dead = b.dead;
 	}
 };
 __host__ __device__ struct PhotonStructAoS{
@@ -175,6 +198,12 @@ __host__ __device__ struct PhotonStructAoS{
 	unsigned long long* weight;			// Photon weight
 	int* layer;				// Current layer
 	unsigned long long* Index;
+	Boolean dead;		/* 1 if photon is terminated. */
+	float s;			/* current step size. [cm]. sourceÇÃ46çsÇ…Ç†ÇÈÇÃÇ≈ÇÕ*/
+	float sleft;		/* step size left. dimensionless [-]. ïKóvÇ©ÇÌÇ©ÇÁÇ»Ç¢*/
+	           //É`ÉFÉbÉNóp
+	double rr;
+
 	__device__ __host__ PhotonStructAoS& PhotonStructAoS::operator =(const PhotonStructAoS& b){
 		this->dx = b.dx;
 		this->dy = b.dy;
@@ -217,7 +246,7 @@ __host__ __device__ struct SimulationStruct{
 	/*à»â∫InputÇ©ÇÁì±ì¸*/
 	char	 out_fformat;
 	double r;
-	double WtH;
+	double Wth;
 	double dt;
 	double da;				
 	short nr;
@@ -226,11 +255,15 @@ __host__ __device__ struct SimulationStruct{
 	__device__ __host__ unsigned int GetRzSize();
 };
 
-
+__host__ __device__ struct CheckStruct{
+	double  w;
+	double  c;
+};
 __host__ __device__ struct MemStruct{
 	PhotonStruct* p;// Pointer to structure array containing all the photon data
 	OutStruct *	Out_Ptr;
 	SimulationStruct*sim;
+	CheckStruct * check;
 	unsigned long long* x;				// Pointer to the array containing all the WMC x's
 	unsigned int* a;					// Pointer to the array containing all the WMC a's
 	unsigned int* thread_active;		// Pointer to the array containing the thread active status
@@ -263,6 +296,7 @@ protected:
 	MemStruct m_sDeviceMem;
 	MemStruct m_sHostMem;
 	OutStruct m_sOutStruct;
+	CheckStruct m_sCheckStruct;
 	unsigned int m_nRunCount;
 	int m_ProcessTime;
 	// åvéZÇ∑ÇÈÉtÉHÉgÉìêî
@@ -290,7 +324,7 @@ public:
 	void InitGPUStat();
 	bool CheckGPU();
 	// Mem.cu
-	void CopyDeviceToHostMem(MemStruct* HostMem, MemStruct* DeviceMem, SimulationStruct* sim);
+	void CopyDeviceToHostMem(MemStruct* HostMem, MemStruct* DeviceMem, SimulationStruct* sim );
 	int  CopyHostToDeviceMem(MemStruct* HostMem, MemStruct* DeviceMem, SimulationStruct* sim);
 	int DoOneSimulation(SimulationStruct* simulation);
 	void RunOldCarnel();
@@ -329,4 +363,6 @@ extern "C"{
 	__host__ __device__ void WriteVersion(FILE *file, char *Version);
 	//__host__ __device__ void RecordR(double	Refl, SimulationStruct * sim, PhotonStruct *p, OutStruct *Out_Ptr);
 	__host__ __device__ void RemodelRecordR(MemStruct  DeviceMem, PhotonStruct *p);
+	__host__ __device__ void ReportResult(SimulationStruct sim, OutStruct Out_Parm);
+	__host__ __device__ void InitOutputData(MemStruct deviceMem, SimulationStruct sim,OutStruct * Out_Ptr);
 }

@@ -65,7 +65,7 @@ __global__ void ReflectTest(MemStruct DeviceMem){
 	
 	p->layer = 1;
 	p->weight = *start_weight_dc;
-	p->dead=Reflect(DeviceMem.p, 0, DeviceMem.x, DeviceMem.a);
+	//p->dead=Reflecta(p, 0, DeviceMem.x, DeviceMem.a);
 
 }
 
@@ -295,11 +295,18 @@ template <int ignoreAdetection> __global__ void CalcMCGPU(MemStruct DeviceMem)
 		{
 			// set the remaining step length to 0
 			dsh_sPhoton[tx].s = 0.0f;
-			
+			DeviceMem.check[tx].cc = 0.0;
 			DeviceMem.check[tx].c = 1.0;
+			
 			// 反射するか確認
-			if (Reflect(&dsh_sPhoton[tx], new_layer, &x, &a) == 0u)//Check for reflection
+			DeviceMem.check[tx].dz = dsh_sPhoton[tx].dz;
+			
+			DeviceMem.check[tx].r = Reflecta(&dsh_sPhoton[tx], new_layer, &x, &a);
+			//Check for reflection
+			
+			if (DeviceMem.check[tx].r == 0u)
 			{ 
+				
 				DeviceMem.check[tx].c = 2.0;
 				// Photon is transmitted　光子が伝達
 				if (new_layer == 0)
@@ -310,9 +317,11 @@ template <int ignoreAdetection> __global__ void CalcMCGPU(MemStruct DeviceMem)
 					AtomicAddULL(&DeviceMem.Rd_ra[index], dsh_sPhoton[tx].weight);
 					
 //					RecordR(dsh_sPhoton[tx]->rr, DeviceMem.In_Ptr, &dsh_sPhoton[tx], DeviceMem.Out_Ptr);//rをどうやって持ってくればいいのか
+					DeviceMem.check[tx].cc = 1.0;
 					DeviceMem.check[tx].c = 3.0;
 					RemodelRecordR(DeviceMem, &dsh_sPhoton[tx]);
 					DeviceMem.check[tx].w = dsh_sPhoton[tx].weight;
+					
 					dsh_sPhoton[tx].weight = 0;
 				}
 				if (new_layer > *n_layers_dc)
@@ -389,6 +398,7 @@ __device__  void LaunchPhoton(PhotonStruct* p)
 	p->dx = 0.0f;
 	p->dy = 0.0f;
 	p->dz = 1.0f;
+	p->rr = 0.0f;
 
 	p->layer = 1;
 	p->weight = *start_weight_dc; //specular reflection!
@@ -532,7 +542,7 @@ __device__ void Spin(PhotonStruct* p, unsigned long long int* x, unsigned int *a
 	p->dz = p->dz*temp;
 
 }// end Spin
-__device__ unsigned int Reflect(PhotonStruct* p, int new_layer, unsigned long long* x, unsigned int* a)
+__device__ unsigned int Reflecta(PhotonStruct* p, int new_layer, unsigned long long* x, unsigned int* a)
 {
 	//Calculates whether the photon is reflected (returns 1) or not (returns 0)
 	// Reflect() will also update the current photon layer (after transmission) and photon direction (both transmission and reflection)
@@ -542,26 +552,28 @@ __device__ unsigned int Reflect(PhotonStruct* p, int new_layer, unsigned long lo
 	float n2 = layers_dc[new_layer].n;
 	float r;
 	float cos_angle_i = fabsf(p->dz);
-
-	if (n1 == n2)//refraction index matching automatic transmission and no direction change
+	//refraction index matching automatic transmission and no direction change
+	if (n1 == n2)
 	{
+		p->rc = 1;
 		p->layer = new_layer;
 		
 		return 0u;
 	}
-
-	if (n1>n2 && n2/n1<sqrtf(1 - cos_angle_i*cos_angle_i))//total internal reflection, no layer change but z-direction mirroring
+	//total internal reflection, no layer change but z-direction mirroring
+	if ((n1>n2) && ((n2/n1)<sqrtf( 1- (cos_angle_i*cos_angle_i))))
 	{
-		p->dz *= -1.0f;
-		
+		p->rc = 2;
+		p->dz *= -1.0f; 
+		//*b= 1;
 		return 1u;
 	}
-
-	if (cos_angle_i == 1.0f)//normal incident
+	//normal incident
+	if (cos_angle_i == 1.0f)
 	{
 		r = __fdividef((n1 - n2), (n1 + n2));
 		p->rr = r;
-		
+		p->rc = 3;
 		if (rand_MWC_co(x, a) <= r*r)
 		{
 			//reflection, no layer change but z-direction mirroring
@@ -570,7 +582,9 @@ __device__ unsigned int Reflect(PhotonStruct* p, int new_layer, unsigned long lo
 			return 1u;
 		}
 		else
-		{	//transmission, no direction change but layer change
+		{	
+			p->rc = 4;
+			//transmission, no direction change but layer change
 			p->layer = new_layer;
 			
 			return 0u;
@@ -600,16 +614,18 @@ __device__ unsigned int Reflect(PhotonStruct* p, int new_layer, unsigned long lo
 	}
 	
 	
-	p->sleft = p->dz;
+	//p->sleft = p->dz;
 
 	if (rand_MWC_co(x, a) <= r)
 	{
+		p->rc = 5;
 		// Reflection, mirror z-direction!
 		p->dz *= -1.0f;
 		return 1u;
 	}
 	else
 	{
+		p->rc = 6;
 		// Transmission, update layer and direction
 		r = __fdividef(n1, n2);
 		float e = r*r*(1.0f - cos_angle_i*cos_angle_i); //e is the sin square of the transmission angle
@@ -786,6 +802,8 @@ int cCUDAMCML::DoOneSimulation(SimulationStruct* simulation)
 		cudastat = cudaMemcpy(m_sHostMem.p, m_sDeviceMem.p, NUM_THREADS * sizeof(PhotonStruct), cudaMemcpyDeviceToHost);
 		cudastat = cudaMemcpy(m_sHostMem.x, m_sDeviceMem.x, NUM_THREADS * sizeof(unsigned long  long), cudaMemcpyDeviceToHost);
 		cudastat = cudaMemcpy(m_sHostMem.a, m_sDeviceMem.a, NUM_THREADS * sizeof(unsigned int ), cudaMemcpyDeviceToHost);
+		
+
 		cudastat = cudaMemcpy(m_sHostMem.thread_active, m_sDeviceMem.thread_active, NUM_THREADS * sizeof(unsigned int), cudaMemcpyDeviceToHost);
 		cudastat = cudaMemcpy(m_sHostMem.num_terminated_photons, m_sDeviceMem.num_terminated_photons,sizeof(unsigned int), cudaMemcpyDeviceToHost);
 		cudastat = cudaMemcpy(m_sHostMem.check, m_sDeviceMem.check, NUM_THREADS * sizeof(CheckStruct), cudaMemcpyDeviceToHost);
@@ -795,21 +813,22 @@ int cCUDAMCML::DoOneSimulation(SimulationStruct* simulation)
 		if (cudastat){
 			return _ERR_GPU_SIM_MEMCPY_;
 		}
-		std::ofstream ofs("text.csv");
-		for (int i = 0; i < NUM_THREADS; i++){
-			ofs << m_sHostMem.p[i].dz<<",";
-			ofs << m_sHostMem.p[i].dead << ",";
-			ofs << m_sHostMem.p[i].sleft << ",";
-			ofs << m_sHostMem.p[i].rr << std::endl;
-		}
+		//std::ofstream ofs("text.csv");
+		//for (int i = 0; i < NUM_THREADS; i++){
+		//	ofs << m_sHostMem.p[i].dz<<",";
+		//	ofs << m_sHostMem.p[i].dead << ",";
+		//	ofs << m_sHostMem.p[i].sleft << ",";
+		//	ofs << m_sHostMem.p[i].rr << std::endl;
+		//}
 		int x = 0;
 		for (int i = 0; i < NUM_THREADS; i++){
 			if (m_sHostMem.thread_active[i] != 65535){
 				TotalP += m_sHostMem.thread_active[i];
 			}
 	
-			if (m_sHostMem.p[i].rr != 0){
-				 x++;
+			if (m_sHostMem.check[i].c == 3 && sqrt(m_sHostMem.check[i].dz*m_sHostMem.check[i].dz)<0.6593){
+		
+			x++;
 				
 				 }
 			
@@ -846,6 +865,7 @@ int cCUDAMCML::InitMallocMem(SimulationStruct* sim){
 	if (tmp != cudaSuccess) {
 		State |= 0x04;
 	}
+	
 	tmp = cudaMalloc((void**)&m_sDeviceMem.thread_active, (NUM_THREADS)*sizeof(unsigned int));
 	if (tmp != cudaSuccess) {
 		State |= 0x20;
@@ -971,6 +991,7 @@ int cCUDAMCML::InitMallocMem(SimulationStruct* sim){
 	m_sHostMem.p = new PhotonStruct			[NUM_THREADS];
 	m_sHostMem.x = new unsigned long long	[NUM_THREADS];
 	m_sHostMem.a = new unsigned int			[NUM_THREADS];
+	
 	if ((m_sHostMem.x == NULL) || (m_sHostMem.a == NULL)){
 		State |= 0x00008000;
 	}
@@ -1071,6 +1092,7 @@ int cCUDAMCML::CopyHostToDeviceMem(MemStruct* HostMem, MemStruct* DeviceMem, Sim
 	if (tmp != cudaSuccess) {
 		State |= 0x80;
 	}
+	
 	tmp = cudaMemcpy(DeviceMem->thread_active, HostMem->thread_active, NUM_THREADS*sizeof(unsigned int), cudaMemcpyHostToDevice);
 	if (tmp != cudaSuccess) {
 		State |= 0x200;
@@ -1251,6 +1273,7 @@ int cCUDAMCML::InitContentsMem(SimulationStruct* sim)
 	HostMem->p->sleft = 0;
 
 	HostMem->p->rr = 0;
+	HostMem->p->rc = 0;
 	tmp = cudaMemset(DeviceMem->p, 0, NUM_THREADS *sizeof(int));
 	if (tmp != cudaSuccess) {
 		State |= 0x40;
@@ -1259,6 +1282,9 @@ int cCUDAMCML::InitContentsMem(SimulationStruct* sim)
 	for (int i = 0; i < NUM_THREADS; i++){
 		HostMem->check[i].c = 0.0;
 		HostMem->check[i].w = 0.0;
+		HostMem->check[i].cc = 0.0;
+		HostMem->check[i].dz = 0.0;
+		HostMem->check[i].r = 0.0;
 	}
 
 
@@ -1406,11 +1432,11 @@ extern "C"{
 		int	 n = Out_Ptr->p1;
 		int id;
 		
-
+		
 		r = sqrt(x*x + y*y);
 
 		if (r >= r1 && r <= (r1 + 0.1*r1))
-
+			
 		{
 			if (y >= 0)
 				t1 = atan2(y, x) * 180 / PI;

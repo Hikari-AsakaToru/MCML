@@ -47,7 +47,7 @@
 
 
 
-#define NUMSTEPS_GPU 1000
+#define NUMSTEPS_GPU 1
 #define PI 3.141592654f
 #define RPI 0.318309886f // Pi Rad
 #define MAX_LAYERS 100
@@ -123,7 +123,7 @@ __host__ __device__ struct PhotonStruct{
 	float s;			/* current step size. [cm]. source‚Ì46s‚É‚ ‚é‚Ì‚Å‚Í*/
 	float sleft;		/* step size left. dimensionless [-]. •K—v‚©‚í‚©‚ç‚È‚¢*/
 	           //ƒ`ƒFƒbƒN—p
-
+	double rc;
 	double rr;
 	__device__ __host__ PhotonStruct& PhotonStruct::operator =(const PhotonStruct& b){
 		this->dx = b.dx;
@@ -135,7 +135,7 @@ __host__ __device__ struct PhotonStruct{
 		this->layer = b.layer;
 		this->weight = b.weight;
 		this->rr = b.rr;
-		
+		this->rc = b.rc;
 		this->s = b.s;
 		this->sleft = b.sleft;
 		this->dead = b.dead;
@@ -156,7 +156,7 @@ __host__ __device__ struct PhotonStructForShared{	// MCMLŽd—l‚É‰ü‘¢‚·‚é‚ÆƒVƒFƒA
 	float sleft;		/* step size left. dimensionless [-]. •K—v‚©‚í‚©‚ç‚È‚¢*/
 	           //ƒ`ƒFƒbƒN—p
 	double rr;
-
+	double rc;
 	__device__ __host__ PhotonStructForShared& PhotonStructForShared::operator =(const PhotonStructForShared& b){
 		this->dx = b.dx;
 		this->dy = b.dy;
@@ -167,7 +167,7 @@ __host__ __device__ struct PhotonStructForShared{	// MCMLŽd—l‚É‰ü‘¢‚·‚é‚ÆƒVƒFƒA
 		this->layer = b.layer;
 		this->weight = b.weight;
 		this->rr = b.rr;
-		
+		this->rc = b.rc;
 		this->s = b.s;
 		this->sleft = b.sleft;
 		this->dead = b.dead;
@@ -182,7 +182,7 @@ __host__ __device__ struct PhotonStructForShared{	// MCMLŽd—l‚É‰ü‘¢‚·‚é‚ÆƒVƒFƒA
 		this->layer = b.layer;
 		this->weight = b.weight;
 		this->rr = b.rr;
-		
+		this->rc = b.rc;
 		this->s = b.s;
 		this->sleft = b.sleft;
 		this->dead = b.dead;
@@ -203,7 +203,7 @@ __host__ __device__ struct PhotonStructAoS{
 	float sleft;		/* step size left. dimensionless [-]. •K—v‚©‚í‚©‚ç‚È‚¢*/
 	           //ƒ`ƒFƒbƒN—p
 	double rr;
-
+	double rc;
 	__device__ __host__ PhotonStructAoS& PhotonStructAoS::operator =(const PhotonStructAoS& b){
 		this->dx = b.dx;
 		this->dy = b.dy;
@@ -258,6 +258,9 @@ __host__ __device__ struct SimulationStruct{
 __host__ __device__ struct CheckStruct{
 	double  w;
 	double  c;
+	double  cc;
+	float   dz;
+	unsigned int r;
 };
 __host__ __device__ struct MemStruct{
 	PhotonStruct* p;// Pointer to structure array containing all the photon data
@@ -283,7 +286,7 @@ __device__ float rand_MWC_oc(unsigned long long*, unsigned int*);
 __device__ float rand_MWC_co(unsigned long long*, unsigned int*);
 __device__ void LaunchPhoton(PhotonStruct*);
 __device__ void Spin(PhotonStruct* p, unsigned long long int* x, unsigned int* a, float g);
-__device__ unsigned int Reflect(PhotonStruct*, int, unsigned long long*, unsigned int*);
+__device__ unsigned int Reflecta(PhotonStruct*, int, unsigned long long*, unsigned int*);
 __device__ unsigned int PhotonSurvive(PhotonStruct*, unsigned long long*, unsigned int*);
 __device__ void AtomicAddULL(unsigned long long* address, unsigned int add);
 __device__ double SpinTheta(unsigned long long int* x, unsigned int *a, double g);

@@ -24,7 +24,8 @@ __device__ __constant__ unsigned long long start_weight_dc[1];
 __device__ __constant__ LayerStruct layers_dc[MAX_LAYERS];
 __device__ __constant__ DetStruct det_dc[1];
 __device__ __constant__ unsigned int dc_Seed[1];
-__device__ unsigned int nInitRngLoop=0;
+__device__ unsigned int nInitRngLoop = 0;
+__device__ unsigned int global[NUM_THREADS];
 
 __shared__ PhotonStruct dsh_sPhoton[NUM_THREADS_PER_BLOCK];
 
@@ -251,10 +252,10 @@ template <int ignoreAdetection> __global__ void CalcMCGPU(MemStruct DeviceMem)
 	//First, make sure the thread (photon) is active
 	unsigned int ii = 0;
 
-	DeviceMem.check[tx].c = 1.0;
+	DeviceMem.check[begin + tx].c = 10.0;
 	for (; ii<NUMSTEPS_GPU; ii++) //this is the main while loop
 	{
-		DeviceMem.check[tx].c = 0.0;
+		DeviceMem.check[begin + tx].c = 0.0;
 		// Rand Make
 		// 桁あふれ出ないか確認
 		if (layers_dc[dsh_sPhoton[tx].layer].mutr != FLT_MAX){
@@ -295,19 +296,20 @@ template <int ignoreAdetection> __global__ void CalcMCGPU(MemStruct DeviceMem)
 		{
 			// set the remaining step length to 0
 			dsh_sPhoton[tx].s = 0.0f;
-			DeviceMem.check[tx].cc = 0.0;
-			DeviceMem.check[tx].c = 1.0;
+			DeviceMem.check[begin + tx].cc = 0.0;
+			DeviceMem.check[begin + tx].c = 1.0;
 			
 			// 反射するか確認
-			DeviceMem.check[tx].dz = dsh_sPhoton[tx].dz;
-			
-			DeviceMem.check[tx].r = Reflecta(&dsh_sPhoton[tx], new_layer, &x, &a);
-			//Check for reflection
-			
-			if (DeviceMem.check[tx].r == 0u)
+			DeviceMem.check[begin + tx].dz = dsh_sPhoton[tx].dz;
+			DeviceMem.check[begin + tx].r = 0;
+			unsigned int  returnvalue = 0;
+			DeviceMem.check[begin + tx].r = Reflect(&dsh_sPhoton[tx], new_layer, &x, &a, &returnvalue);
+			//Check for reflection.0は透過，1は反射
+			//DeviceMem.check[begin + tx].r = global[begin + tx];
+			if (DeviceMem.check[begin + tx].r == 0u)
 			{ 
 				
-				DeviceMem.check[tx].c = 2.0;
+				DeviceMem.check[begin + tx].c = 2.0;
 				// Photon is transmitted　光子が伝達
 				if (new_layer == 0)
 				{	// Diffuse reflectance　拡散反射
@@ -317,10 +319,10 @@ template <int ignoreAdetection> __global__ void CalcMCGPU(MemStruct DeviceMem)
 					AtomicAddULL(&DeviceMem.Rd_ra[index], dsh_sPhoton[tx].weight);
 					
 //					RecordR(dsh_sPhoton[tx]->rr, DeviceMem.In_Ptr, &dsh_sPhoton[tx], DeviceMem.Out_Ptr);//rをどうやって持ってくればいいのか
-					DeviceMem.check[tx].cc = 1.0;
-					DeviceMem.check[tx].c = 3.0;
+					DeviceMem.check[begin + tx].cc = 1.0;
+					DeviceMem.check[begin + tx].c = 3.0;
 					RemodelRecordR(DeviceMem, &dsh_sPhoton[tx]);
-					DeviceMem.check[tx].w = dsh_sPhoton[tx].weight;
+					DeviceMem.check[begin + tx].w = dsh_sPhoton[tx].weight;
 					
 					dsh_sPhoton[tx].weight = 0;
 				}
@@ -329,8 +331,8 @@ template <int ignoreAdetection> __global__ void CalcMCGPU(MemStruct DeviceMem)
 					index = __float2int_rz(__fdividef(acosf(dsh_sPhoton[tx].dz), (PI / det_dc[0].na)))*det_dc[0].nr + min(__float2int_rz(__fdividef(__fsqrt_rz(dsh_sPhoton[tx].x*dsh_sPhoton[tx].x + dsh_sPhoton[tx].y*dsh_sPhoton[tx].y), det_dc[0].dr)), (int)det_dc[0].nr - 1);
 					AtomicAddULL(&DeviceMem.Tt_ra[index], dsh_sPhoton[tx].weight);
 					
-					DeviceMem.check[tx].c = 4.0;
-					DeviceMem.check[tx].w = dsh_sPhoton[tx].weight;
+					DeviceMem.check[begin + tx].c = 4.0;
+					DeviceMem.check[begin + tx].w = dsh_sPhoton[tx].weight;
 					dsh_sPhoton[tx].weight = 0;
 				}
 			}
@@ -341,7 +343,7 @@ template <int ignoreAdetection> __global__ void CalcMCGPU(MemStruct DeviceMem)
 			// Drop weight (apparently only when the photon is scattered) 光子の質量減少
 			w_temp = __float2uint_rn(layers_dc[dsh_sPhoton[tx].layer].mua*layers_dc[dsh_sPhoton[tx].layer].mutr*__uint2float_rn(dsh_sPhoton[tx].weight));
 			dsh_sPhoton[tx].weight -= w_temp;
-			DeviceMem.check[tx].c = 5.0;
+			//DeviceMem.check[tx].c = 5.0;
 			if (ignoreAdetection == 0) // Evaluated at compiletime!
 			{
 				index = (min(__float2int_rz(__fdividef(dsh_sPhoton[tx].z, det_dc[0].dz)), (int)det_dc[0].nz - 1)*det_dc[0].nr + min(__float2int_rz(__fdividef(sqrtf(dsh_sPhoton[tx].x*dsh_sPhoton[tx].x + dsh_sPhoton[tx].y*dsh_sPhoton[tx].y), det_dc[0].dr)), (int)det_dc[0].nr - 1));
@@ -399,7 +401,7 @@ __device__  void LaunchPhoton(PhotonStruct* p)
 	p->dy = 0.0f;
 	p->dz = 1.0f;
 	p->rr = 0.0f;
-
+	p->rc = 0.0f;
 	p->layer = 1;
 	p->weight = *start_weight_dc; //specular reflection!
 
@@ -542,12 +544,13 @@ __device__ void Spin(PhotonStruct* p, unsigned long long int* x, unsigned int *a
 	p->dz = p->dz*temp;
 
 }// end Spin
-__device__ unsigned int Reflecta(PhotonStruct* p, int new_layer, unsigned long long* x, unsigned int* a)
+__device__ unsigned int Reflect(PhotonStruct* p, int new_layer, unsigned long long* x, unsigned int* a, unsigned int* returnvalue)
 {
+	
+	//returnvalueは新規追加．戻り値を返すために設置（16/12/20)
 	//Calculates whether the photon is reflected (returns 1) or not (returns 0)
 	// Reflect() will also update the current photon layer (after transmission) and photon direction (both transmission and reflection)
-
-
+	
 	float n1 = layers_dc[p->layer].n;
 	float n2 = layers_dc[new_layer].n;
 	float r;
@@ -555,17 +558,18 @@ __device__ unsigned int Reflecta(PhotonStruct* p, int new_layer, unsigned long l
 	//refraction index matching automatic transmission and no direction change
 	if (n1 == n2)
 	{
-		p->rc = 1;
+		*returnvalue = 0;
 		p->layer = new_layer;
-		
 		return 0u;
+		
 	}
 	//total internal reflection, no layer change but z-direction mirroring
 	if ((n1>n2) && ((n2/n1)<sqrtf( 1- (cos_angle_i*cos_angle_i))))
 	{
+		*returnvalue = 1;
 		p->rc = 2;
 		p->dz *= -1.0f; 
-		//*b= 1;
+		
 		return 1u;
 	}
 	//normal incident
@@ -577,17 +581,20 @@ __device__ unsigned int Reflecta(PhotonStruct* p, int new_layer, unsigned long l
 		if (rand_MWC_co(x, a) <= r*r)
 		{
 			//reflection, no layer change but z-direction mirroring
+			*returnvalue = 1;
 			p->dz *= -1.0f;
 			
 			return 1u;
 		}
 		else
 		{	
+			*returnvalue = 0;
 			p->rc = 4;
 			//transmission, no direction change but layer change
 			p->layer = new_layer;
 			
 			return 0u;
+			
 		}
 	}
 	else
@@ -618,13 +625,16 @@ __device__ unsigned int Reflecta(PhotonStruct* p, int new_layer, unsigned long l
 
 	if (rand_MWC_co(x, a) <= r)
 	{
+		*returnvalue = 1;
 		p->rc = 5;
 		// Reflection, mirror z-direction!
 		p->dz *= -1.0f;
+		
 		return 1u;
 	}
 	else
 	{
+		*returnvalue = 0;
 		p->rc = 6;
 		// Transmission, update layer and direction
 		r = __fdividef(n1, n2);
@@ -633,9 +643,9 @@ __device__ unsigned int Reflecta(PhotonStruct* p, int new_layer, unsigned long l
 		p->dy *= r;
 		p->dz = copysignf(sqrtf(1 - e), p->dz);
 		p->layer = new_layer;
+		
 		return 0u;
 	}
-	
 }
 __device__ unsigned int PhotonSurvive(PhotonStruct* p, unsigned long long* x, unsigned int* a)
 {	//Calculate wether the photon survives (returns 1) or dies (returns 0)
@@ -826,8 +836,8 @@ int cCUDAMCML::DoOneSimulation(SimulationStruct* simulation)
 				TotalP += m_sHostMem.thread_active[i];
 			}
 	
-			if (m_sHostMem.check[i].c == 3 && sqrt(m_sHostMem.check[i].dz*m_sHostMem.check[i].dz)<0.6593){
-		
+			if (m_sHostMem.check[i].r !=0){
+
 			x++;
 				
 				 }
@@ -1285,6 +1295,7 @@ int cCUDAMCML::InitContentsMem(SimulationStruct* sim)
 		HostMem->check[i].cc = 0.0;
 		HostMem->check[i].dz = 0.0;
 		HostMem->check[i].r = 0.0;
+	
 	}
 
 

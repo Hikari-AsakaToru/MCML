@@ -47,7 +47,7 @@
 
 
 
-#define NUMSTEPS_GPU 1
+#define NUMSTEPS_GPU 1000
 #define PI 3.141592654f
 #define RPI 0.318309886f // Pi Rad
 #define MAX_LAYERS 100
@@ -261,6 +261,7 @@ __host__ __device__ struct CheckStruct{
 	double  cc;
 	float   dz;
 	unsigned int r;
+
 };
 __host__ __device__ struct MemStruct{
 	PhotonStruct* p;// Pointer to structure array containing all the photon data
@@ -286,7 +287,7 @@ __device__ float rand_MWC_oc(unsigned long long*, unsigned int*);
 __device__ float rand_MWC_co(unsigned long long*, unsigned int*);
 __device__ void LaunchPhoton(PhotonStruct*);
 __device__ void Spin(PhotonStruct* p, unsigned long long int* x, unsigned int* a, float g);
-__device__ unsigned int Reflecta(PhotonStruct*, int, unsigned long long*, unsigned int*);
+__device__ unsigned int Reflect(PhotonStruct*, int, unsigned long long*, unsigned int*,unsigned int*);
 __device__ unsigned int PhotonSurvive(PhotonStruct*, unsigned long long*, unsigned int*);
 __device__ void AtomicAddULL(unsigned long long* address, unsigned int add);
 __device__ double SpinTheta(unsigned long long int* x, unsigned int *a, double g);

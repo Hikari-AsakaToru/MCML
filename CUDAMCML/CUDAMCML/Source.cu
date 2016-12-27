@@ -296,7 +296,7 @@ template <int ignoreAdetection> __global__ void CalcMCGPU(MemStruct DeviceMem)
 		{
 			// set the remaining step length to 0
 			dsh_sPhoton[tx].s = 0.0f;
-			DeviceMem.check[begin + tx].cc = 0.0;
+			
 			DeviceMem.check[begin + tx].c = 1.0;
 			
 			// 反射するか確認
@@ -319,7 +319,7 @@ template <int ignoreAdetection> __global__ void CalcMCGPU(MemStruct DeviceMem)
 					AtomicAddULL(&DeviceMem.Rd_ra[index], dsh_sPhoton[tx].weight);
 					
 //					RecordR(dsh_sPhoton[tx]->rr, DeviceMem.In_Ptr, &dsh_sPhoton[tx], DeviceMem.Out_Ptr);//rをどうやって持ってくればいいのか
-					DeviceMem.check[begin + tx].cc = 1.0;
+				
 					DeviceMem.check[begin + tx].c = 3.0;
 					RemodelRecordR(DeviceMem, &dsh_sPhoton[tx]);
 					DeviceMem.check[begin + tx].w = dsh_sPhoton[tx].weight;
@@ -343,7 +343,7 @@ template <int ignoreAdetection> __global__ void CalcMCGPU(MemStruct DeviceMem)
 			// Drop weight (apparently only when the photon is scattered) 光子の質量減少
 			w_temp = __float2uint_rn(layers_dc[dsh_sPhoton[tx].layer].mua*layers_dc[dsh_sPhoton[tx].layer].mutr*__uint2float_rn(dsh_sPhoton[tx].weight));
 			dsh_sPhoton[tx].weight -= w_temp;
-			//DeviceMem.check[tx].c = 5.0;
+			DeviceMem.check[begin + tx].c = 5.0;
 			if (ignoreAdetection == 0) // Evaluated at compiletime!
 			{
 				index = (min(__float2int_rz(__fdividef(dsh_sPhoton[tx].z, det_dc[0].dz)), (int)det_dc[0].nz - 1)*det_dc[0].nr + min(__float2int_rz(__fdividef(sqrtf(dsh_sPhoton[tx].x*dsh_sPhoton[tx].x + dsh_sPhoton[tx].y*dsh_sPhoton[tx].y), det_dc[0].dr)), (int)det_dc[0].nr - 1));
@@ -407,8 +407,11 @@ __device__  void LaunchPhoton(PhotonStruct* p)
 
 }
 
-__global__ void LaunchPhoton_Global(PhotonStruct* pd)
+__global__ void LaunchPhoton_Global(MemStruct DevMem)
 {
+	PhotonStruct* pd = DevMem.p;
+	unsigned int* thread_active = DevMem.thread_active;
+	unsigned int* num_terminated_photons=DevMem.num_terminated_photons;
 	unsigned long long PosData = blockIdx.x*NUM_THREADS_PER_BLOCK + threadIdx.x;
 	//First element processed by the block
 	if (PosData < num_photons_dc[0]){
@@ -423,6 +426,8 @@ __global__ void LaunchPhoton_Global(PhotonStruct* pd)
 		pd[PosData].layer	= 1;
 		pd[PosData].Index = PosData;
 		pd[PosData].weight	= (unsigned int)*start_weight_dc;
+		thread_active[PosData] = 0;
+		num_terminated_photons[0] = 0;
 
 		//DeviceMem->p[begin + tx] = p;//incoherent!?
 		
@@ -461,7 +466,8 @@ __global__ void SetRandpram(curandState* devState){
 
 __global__ void InitRng(MemStruct devMem,curandState* RndMakerglobal){
 	curandState RndMakerLocal;
-	RndMakerLocal = RndMakerglobal[threadIdx.x];
+	int id = threadIdx.x + blockIdx.x * blockDim.x;
+	RndMakerLocal = RndMakerglobal[id];
 	unsigned long long* X = devMem.x;
 	unsigned int* A = devMem.a;
 	unsigned long long un64PosData = blockIdx.x*blockDim.x + threadIdx.x;
@@ -560,8 +566,8 @@ __device__ unsigned int Reflect(PhotonStruct* p, int new_layer, unsigned long lo
 	{
 		*returnvalue = 0;
 		p->layer = new_layer;
+		//return 0u;
 		return 0u;
-		
 	}
 	//total internal reflection, no layer change but z-direction mirroring
 	if ((n1>n2) && ((n2/n1)<sqrtf( 1- (cos_angle_i*cos_angle_i))))
@@ -592,8 +598,8 @@ __device__ unsigned int Reflect(PhotonStruct* p, int new_layer, unsigned long lo
 			p->rc = 4;
 			//transmission, no direction change but layer change
 			p->layer = new_layer;
-			
 			return 0u;
+			//return 0u;
 			
 		}
 	}
@@ -638,13 +644,14 @@ __device__ unsigned int Reflect(PhotonStruct* p, int new_layer, unsigned long lo
 		p->rc = 6;
 		// Transmission, update layer and direction
 		r = __fdividef(n1, n2);
+		
 		float e = r*r*(1.0f - cos_angle_i*cos_angle_i); //e is the sin square of the transmission angle
 		p->dx *= r;
 		p->dy *= r;
 		p->dz = copysignf(sqrtf(1 - e), p->dz);
 		p->layer = new_layer;
-		
 		return 0u;
+		
 	}
 }
 __device__ unsigned int PhotonSurvive(PhotonStruct* p, unsigned long long* x, unsigned int* a)
@@ -669,6 +676,12 @@ __device__ void AtomicAddULL(unsigned long long* address, unsigned long long add
 	if (atomicAdd((unsigned long long*)address, add) + add<add)
 		atomicAdd(((unsigned long long*)address) + 1, 1u);
 }
+__device__ void AtomicAddDBL(double* address, double add)
+{
+	if (atomicAdd((double*)address, add) + add<add)
+		atomicAdd(((double*)address) + 1, 1u);
+}
+
 __device__ float rand_MWC_co(unsigned long long* x, unsigned int* a)
 {
 	float temp = 0.0;
@@ -765,7 +778,7 @@ int cCUDAMCML::InitPhoton(){
 	dim3 dimNumBlock(19);
 	dim3 dimNumThread(NUM_THREADS_PER_BLOCK);
 
-	LaunchPhoton_Global << < dimNumBlock, dimNumThread >> > (m_sDeviceMem.p);
+	LaunchPhoton_Global << < dimNumBlock, dimNumThread >> > (m_sDeviceMem);
 	cudaError_t cudastat = cudaGetLastError();	// Check if there was an error
 
 	if (cudastat){
@@ -830,18 +843,11 @@ int cCUDAMCML::DoOneSimulation(SimulationStruct* simulation)
 		//	ofs << m_sHostMem.p[i].sleft << ",";
 		//	ofs << m_sHostMem.p[i].rr << std::endl;
 		//}
-		int x = 0;
+
 		for (int i = 0; i < NUM_THREADS; i++){
 			if (m_sHostMem.thread_active[i] != 65535){
 				TotalP += m_sHostMem.thread_active[i];
 			}
-	
-			if (m_sHostMem.check[i].r !=0){
-
-			x++;
-				
-				 }
-			
 		}
 	}
 
@@ -1422,7 +1428,7 @@ void cCUDAMCML::InitGPUStat(){
 *	Update the photon weight as well.
 ****/
 extern "C"{
-	__host__ __device__ void RemodelRecordR(MemStruct  DeviceMem, PhotonStruct *p)
+	__device__ void RemodelRecordR(MemStruct  DeviceMem, PhotonStruct *p)
 	{
 		SimulationStruct*sim = DeviceMem.sim;
 		OutStruct	*Out_Ptr = DeviceMem.Out_Ptr;
@@ -1442,10 +1448,18 @@ extern "C"{
 		short	 l;
 		int	 n = Out_Ptr->p1;
 		int id;
-		
+		//Block index
+		int bx = blockIdx.x;
+
+		//Thread index
+		int tx = threadIdx.x;
+
+
+		//First element processed by the block
+		int begin = blockDim.x*bx;
 		
 		r = sqrt(x*x + y*y);
-
+		//Out_Ptr->Rd_ra[tx] = tx;
 		if (r >= r1 && r <= (r1 + 0.1*r1))
 			
 		{
@@ -1472,10 +1486,14 @@ extern "C"{
 			iad = (short)(acos(-dz) * 180 / PI / sim->da);
 			if (iad > sim->na - 1) ia = sim->na - 1;
 			else ia = iad;
+			//AtomicAddDBL(&Out_Ptr->Rd_ra[sim->nr*it + ia], p->weight*(1.0 - Refl));
 
-			Out_Ptr->Rd_ra[sim->nr*it + ia] += p->weight*(1.0 - Refl);		/* 各天頂角・各方位角の光子ウェイトの記録 */
-			Out_Ptr->Rd_p[sim->nr*it + ia] += 1;							/* 各天頂角・各方位角の光子数の記録 */
-			Out_Ptr->P += p->weight*(1.0 - Refl);
+			AtomicAddDBL(&Out_Ptr->Rd_ra[sim->nr*ia + it], p->weight*(1.0 - Refl));
+			//Out_Ptr->Rd_ra[tx] = tx;		/* 各天頂角・各方位角の光子ウェイトの記録 */
+			//AtomicAddDBL(&Out_Ptr->Rd_p[sim->nr*it + ia] ,1);							/* 各天頂角・各方位角の光子数の記録 */
+			AtomicAddDBL(&Out_Ptr->Rd_p[sim->nr*ia + it], 1);
+			//AtomicAddDBL(&Out_Ptr->Rd_p[tx], 1);
+			AtomicAddDBL(&Out_Ptr->P , p->weight*(1.0 - Refl));
 
 			for (l = 1; l <= nl; l++)
 				Out_Ptr->L[l] += Out_Ptr->OPL[l] * p->weight*(1.0 - Refl);		/* 受光エリアに入った光子の光路長の記録 */

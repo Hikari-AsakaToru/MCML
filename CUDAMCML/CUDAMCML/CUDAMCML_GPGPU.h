@@ -261,7 +261,7 @@ __host__ __device__ struct CheckStruct{
 	double  cc;
 	float   dz;
 	unsigned int r;
-
+	
 };
 __host__ __device__ struct MemStruct{
 	PhotonStruct* p;// Pointer to structure array containing all the photon data
@@ -290,6 +290,7 @@ __device__ void Spin(PhotonStruct* p, unsigned long long int* x, unsigned int* a
 __device__ unsigned int Reflect(PhotonStruct*, int, unsigned long long*, unsigned int*,unsigned int*);
 __device__ unsigned int PhotonSurvive(PhotonStruct*, unsigned long long*, unsigned int*);
 __device__ void AtomicAddULL(unsigned long long* address, unsigned int add);
+__device__ void AtomicAddDBL(double* address, double add);
 __device__ double SpinTheta(unsigned long long int* x, unsigned int *a, double g);
 __device__ void Hop(PhotonStruct* p, float s);
 #endif
@@ -366,7 +367,7 @@ extern "C"{
 	__host__ __device__ void WriteRd_ra(FILE * file, short Nr, short Na, OutStruct Out_Parm);
 	__host__ __device__ void WriteVersion(FILE *file, char *Version);
 	//__host__ __device__ void RecordR(double	Refl, SimulationStruct * sim, PhotonStruct *p, OutStruct *Out_Ptr);
-	__host__ __device__ void RemodelRecordR(MemStruct  DeviceMem, PhotonStruct *p);
+	__device__ void RemodelRecordR(MemStruct  DeviceMem, PhotonStruct *p);
 	__host__ __device__ void ReportResult(SimulationStruct sim, OutStruct Out_Parm);
 	__host__ __device__ void InitOutputData(MemStruct deviceMem, SimulationStruct sim,OutStruct * Out_Ptr);
 }

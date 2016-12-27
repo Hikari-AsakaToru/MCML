@@ -47,14 +47,16 @@ class cMCML :public cCUDAMCML{
 		cOutputFile->WriteString(TransCstr);
 		TransCstr.Format(_T("# Rd[nt-1][0],[nt-1][1],..[nt-1][na-1].\n"));
 		cOutputFile->WriteString(TransCstr);
-		TransCstr.Format(_T("# Rd_ta"));
+		TransCstr.Format(_T("# Rd_ra"));
 		cOutputFile->WriteString(TransCstr);
 
 		for (it = 0; it < m_simulations->det.nr; it++)
 		{
 			for (ia = 0; ia < m_simulations->det.na; ia++)
 			{
+				//TransCstr.Format(_T("%12.4E,"), m_sHostMem.Out_Ptr->Rd_ra[ia + it*m_simulations->det.nr]);
 				TransCstr.Format(_T("%12.4E,"), m_sHostMem.Out_Ptr->Rd_ra[it + ia*m_simulations->det.nr]);
+
 				cOutputFile->WriteString(TransCstr);
 				if ((it*m_simulations->det.na + ia + 1) % 9 == 0)
 					TransCstr.Format(_T("\n"));

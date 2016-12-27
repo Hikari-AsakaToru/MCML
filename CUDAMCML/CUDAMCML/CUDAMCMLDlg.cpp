@@ -495,6 +495,7 @@ CString cMCML::ReadSimData(CString* filename, SimulationStruct** simulations, in
 		
 		// スレッド数の決定
 		// フォトンの数とメッシュ数に応じたGPUの必要メモリを算出
+		UINT64 Tmp = (*simulations)[nLoop].number_of_photons;
 		(*simulations)[nLoop].nDivedSimNum = 1;
 		m_un64Membyte = (sizeof(PhotonStruct) + sizeof(unsigned long long) + 2 * sizeof(int))*(*simulations)[nLoop].number_of_photons + sizeof(unsigned int)
 		+ sizeof(unsigned long long)*((*simulations)[nLoop].det.nr*((*simulations)[nLoop].det.nz + 2 * (*simulations)[nLoop].det.na));
@@ -507,7 +508,7 @@ CString cMCML::ReadSimData(CString* filename, SimulationStruct** simulations, in
 			m_un64Membyte = (sizeof(PhotonStruct) + sizeof(unsigned long long) + 3 * sizeof(int))*(*simulations)[nLoop].number_of_photons
 				+ sizeof(unsigned long long)*((*simulations)[nLoop].det.nr*((*simulations)[nLoop].det.nz + 2 * (*simulations)[nLoop].det.na));
 		}
-		(*simulations)[nLoop].nDivedSimNum *= m_un64NumPhoton / (*simulations)[nLoop].number_of_photons;
+//		(*simulations)[nLoop].nDivedSimNum *= Tmp / (*simulations)[nLoop].number_of_photons;
 		(*simulations)[nLoop].nDivedSimNum++;
 		//　初期質量の計算
 		double n1 = (*simulations)[nLoop].layers[0].n;

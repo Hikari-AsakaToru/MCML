@@ -36,39 +36,40 @@ unsigned int SimulationStruct::GetRzSize(){
 	return det.nr*det.nz;
 }
 
-__global__ void ReflectTest(MemStruct DeviceMem){
-	//Block index
-	int bx = blockIdx.x;
-
-	//Thread index
-	int tx = threadIdx.x;
-	int new_layer = 0;
-
-
-
-	//First element processed by the block
-	int begin = blockDim.x*bx;
-	PhotonStruct* p = &DeviceMem.p[begin + tx];
-	p->dead = 0;
-	p->s = 0;
-	p->sleft = 0;
-
-	p->x = 0.0f;
-	p->y = 0.0f;
-	p->z = 0.001f;
-	p->dx = 0.2f;
-	p->dy = 0.3f;
-	p->dz = -0.9f+tx*0.001;
-	
-	p->dx = p->dx / sqrt(p->dx*p->dx + p->dy*p->dy + p->dz*p->dz);
-	p->dy = p->dy / sqrt(p->dx*p->dx + p->dy*p->dy + p->dz*p->dz);
-	p->dz = p->dz / sqrt(p->dx*p->dx + p->dy*p->dy + p->dz*p->dz);
-	
-	p->layer = 1;
-	p->weight = *start_weight_dc;
-	//p->dead=Reflecta(p, 0, DeviceMem.x, DeviceMem.a);
-
-}
+//__global__ void ReflectTest(MemStruct DeviceMem){
+//	//Block index
+//	int bx = blockIdx.x;
+//
+//	//Thread index
+//	int tx = threadIdx.x;
+//	int new_layer = 0;
+//
+//
+//
+//	//First element processed by the block
+//	int begin = blockDim.x*bx;
+//
+//	PhotonStruct* p = &DeviceMem.p[begin + tx];
+//	p->dead = 0;
+//	p->s = 0;
+//	p->sleft = 0;
+//	
+//	p->x = 0.0f;
+//	p->y = 0.0f;
+//	p->z = 0.001f;
+//	p->dx = 0.2f;
+//	p->dy = 0.3f;
+//	p->dz = -0.9f+tx*0.001;
+//	
+//	p->dx = p->dx / sqrt(p->dx*p->dx + p->dy*p->dy + p->dz*p->dz);
+//	p->dy = p->dy / sqrt(p->dx*p->dx + p->dy*p->dy + p->dz*p->dz);
+//	p->dz = p->dz / sqrt(p->dx*p->dx + p->dy*p->dy + p->dz*p->dz);
+//	
+//	p->layer = 1;
+//	p->weight = *start_weight_dc;
+//	//p->dead=Reflecta(p, 0, DeviceMem.x, DeviceMem.a);
+//
+//}
 
 //
 // MCML計算の本体
@@ -265,7 +266,7 @@ template <int ignoreAdetection> __global__ void CalcMCGPU(MemStruct DeviceMem)
 			// 一時的に100 cm代入
 			dsh_sPhoton[tx].s = 100.0f;															//temporary, say the step in glass is 100 cm.
 		}
-		
+		DeviceMem.check[begin + tx].cc = dsh_sPhoton[tx].s;
 		// Hop_Drop() mcml_go
 		//Check for layer transitions and in case, calculate s
 		new_layer = dsh_sPhoton[tx].layer;
@@ -277,7 +278,7 @@ template <int ignoreAdetection> __global__ void CalcMCGPU(MemStruct DeviceMem)
 		// 現在のレイヤーよりも下に移動してるかを確認
 		if (dsh_sPhoton[tx].z + dsh_sPhoton[tx].s*dsh_sPhoton[tx].dz>layers_dc[dsh_sPhoton[tx].layer].z_max){
 			new_layer++;
-			dsh_sPhoton[tx].s = __fdividef(layers_dc[dsh_sPhoton[tx].layer].z_max - dsh_sPhoton[tx].z, dsh_sPhoton[tx].dz); 
+			dsh_sPhoton[tx].s = __fdividef(layers_dc[dsh_sPhoton[tx].layer].z_max - dsh_sPhoton[tx].z, dsh_sPhoton[tx].dz);
 		} //Check for downward reflection/transmission
 
 		// 位置を代入
@@ -366,7 +367,7 @@ template <int ignoreAdetection> __global__ void CalcMCGPU(MemStruct DeviceMem)
 
 
 
-		if (!PhotonSurvive(&dsh_sPhoton[tx], &x, &a)==1u) // Check if photons survives or not
+		if (!PhotonSurvive(&dsh_sPhoton[tx], &x, &a) == 1u) // Check if photons survives or not
 		{
 			DeviceMem.thread_active[begin + tx] = 1;
 			LaunchPhoton(&dsh_sPhoton[tx]);
@@ -681,14 +682,92 @@ __device__ void AtomicAddDBL(double* address, double add)
 	if (atomicAdd((double*)address, add) + add<add)
 		atomicAdd(((double*)address) + 1, 1u);
 }
+#define MBIG 1000000000
+#define MSEED 161803398
+#define MZ 0
+#define FAC 1.0E-9
+
+__device__ float ran3(int *idum)
+{
+	static int inext, inextp;
+	static long ma[56];
+	static int iff = 0;
+	long mj, mk;
+	int i, ii, k;
+
+	if (*idum < 0 || iff == 0) {
+		iff = 1;
+		mj = MSEED - (*idum < 0 ? -*idum : *idum);
+		mj %= MBIG;
+		ma[55] = mj;
+		mk = 1;
+		for (i = 1; i <= 54; i++) {
+			ii = (21 * i) % 55;
+			ma[ii] = mk;
+			mk = mj - mk;
+			if (mk < MZ) mk += MBIG;
+			mj = ma[ii];
+		}
+		for (k = 1; k <= 4; k++)
+			for (i = 1; i <= 55; i++) {
+				ma[i] -= ma[1 + (i + 30) % 55];
+				if (ma[i] < MZ) ma[i] += MBIG;
+			}
+		inext = 0;
+		inextp = 31;
+		*idum = 1;
+	}
+	if (++inext == 56) inext = 1;
+	if (++inextp == 56) inextp = 1;
+	mj = ma[inext] - ma[inextp];
+	if (mj < MZ) mj += MBIG;
+	ma[inext] = mj;
+	return mj*FAC;
+}
+
+#undef MBIG
+#undef MSEED
+#undef MZ
+#undef FAC
+
+
+/***********************************************************
+*	Generate a random number between 0 and 1.  Take a
+*	number as seed the first time entering the function.
+*	The seed is limited to 1<<15.
+*	We found that when idum is too large, ran3 may return
+*	numbers beyond 0 and 1.
+****/
+__device__ double RandomNum(void)
+{
+	static Boolean first_time = 1;
+	static int idum;	/* seed for ran3. */
+
+	if (first_time) {
+#if STANDARDTEST /* Use fixed seed to test the program. */
+		idum = -1;
+#else
+		idum = -(int)1 % (1 << 15);
+		/* use 16-bit integer as the seed. */
+#endif
+		ran3(&idum);
+		first_time = 0;
+		idum = 1;
+	}
+
+	return(ran3(&idum));
+}
 
 __device__ float rand_MWC_co(unsigned long long* x, unsigned int* a)
 {
+	return RandomNum();
 	float temp = 0.0;
+	
 	//Generate a random number [0,1)
-	*x = (*x & 0xffffffffull)*(*a) + (*x >> 32);
-	temp = __fdividef(__uint2float_rz((unsigned int)(*x)), (float)0x100000000);// The typecast will truncate the x so that it is 0<=x<(2^32-1),__uint2float_rz ensures a round towards zero since 32-bit floating point cannot represent all integers that large. Dividing by 2^32 will hence yield [0,1)
-	return temp;
+	//*x = (*x & 0xffffffffull)*(*a) + (*x >> 32);
+	//temp = __fdividef(__uint2float_rz((unsigned int)(*x)), (float)0x100000000);// The typecast will truncate the x so that it is 0<=x<(2^32-1),__uint2float_rz ensures a round towards zero since 32-bit floating point cannot represent all integers that large. Dividing by 2^32 will hence yield [0,1)
+	//
+	//return temp;
 }//end __device__ rand_MWC_co
 __device__ float rand_MWC_oc(unsigned long long* x, unsigned int* a)
 {
@@ -838,15 +917,20 @@ int cCUDAMCML::DoOneSimulation(SimulationStruct* simulation)
 		}
 		//std::ofstream ofs("text.csv");
 		//for (int i = 0; i < NUM_THREADS; i++){
-		//	ofs << m_sHostMem.p[i].dz<<",";
-		//	ofs << m_sHostMem.p[i].dead << ",";
-		//	ofs << m_sHostMem.p[i].sleft << ",";
-		//	ofs << m_sHostMem.p[i].rr << std::endl;
+		//	ofs << m_sHostMem.check[i].dz << std::endl;
+		//	//ofs << m_sHostMem.p[i].dead << ",";
+		//	//ofs << m_sHostMem.p[i].sleft << ",";
+		//	//ofs << m_sHostMem.p[i].rr << std::endl;
 		//}
-
+		int x = 0;
 		for (int i = 0; i < NUM_THREADS; i++){
 			if (m_sHostMem.thread_active[i] != 65535){
 				TotalP += m_sHostMem.thread_active[i];
+			}
+			if (m_sHostMem.check[i].c != 0 ){
+
+				x++;
+
 			}
 		}
 	}
@@ -1035,7 +1119,7 @@ int cCUDAMCML::InitMallocMem(SimulationStruct* sim){
 	}
 	*m_sHostMem.num_terminated_photons = 0;
 
-	m_sHostMem.Out_Ptr = new OutStruct[1];
+	m_sHostMem.Out_Ptr = new OutStruct;
 	if (m_sHostMem.Out_Ptr == NULL){
 		State |= 0x00200000;
 	}
@@ -1089,6 +1173,7 @@ void cCUDAMCML::CopyDeviceToHostMem(MemStruct* HostMem, MemStruct* DeviceMem, Si
 	//Also copy the state of the RNG's
 	cudaMemcpy(HostMem->p, DeviceMem->p, NUM_THREADS *sizeof(PhotonStruct), cudaMemcpyDeviceToHost);
 	tmp = cudaMemcpy(HostMem->Out_Ptr->opl, m_sOutStruct.opl, sizeof(double), cudaMemcpyDeviceToHost);
+	
 	if (tmp != cudaSuccess) {
 
 	}
@@ -1496,9 +1581,11 @@ extern "C"{
 			AtomicAddDBL(&Out_Ptr->P , p->weight*(1.0 - Refl));
 
 			for (l = 1; l <= nl; l++)
+			{
 				Out_Ptr->L[l] += Out_Ptr->OPL[l] * p->weight*(1.0 - Refl);		/* 受光エリアに入った光子の光路長の記録 */
 
-			Out_Ptr->p1 += 1;
+				Out_Ptr->p1 += 1;
+			}
 		}
 
 		p->weight *= Refl;

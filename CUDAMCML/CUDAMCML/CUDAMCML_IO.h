@@ -59,8 +59,10 @@ class cMCML :public cCUDAMCML{
 
 				cOutputFile->WriteString(TransCstr);
 				if ((it*m_simulations->det.na + ia + 1) % 9 == 0)
+				{
 					TransCstr.Format(_T("\n"));
-				cOutputFile->WriteString(TransCstr);
+					cOutputFile->WriteString(TransCstr);
+				}
 			}
 		}
 		TransCstr.Format(_T("\n"));
@@ -89,9 +91,12 @@ class cMCML :public cCUDAMCML{
 			{
 				TransCstr.Format(_T("%12.4E,"), m_sHostMem.Out_Ptr->Rd_p[it + ia*m_simulations->det.nr]);
 				cOutputFile->WriteString(TransCstr);
-				if ((it*m_simulations->det.na + ia + 1) % 9 == 0)
+				//if ((it*m_simulations->det.na + ia + 1) % 9 == 0)
+				if ((ia + 1) % 9 == 0)
+				{
 					TransCstr.Format(_T("\n"));
-				cOutputFile->WriteString(TransCstr);
+					cOutputFile->WriteString(TransCstr);
+				}
 			}
 		}
 		TransCstr.Format(_T("photon number"));

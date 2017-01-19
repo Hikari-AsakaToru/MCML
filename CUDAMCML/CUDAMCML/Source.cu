@@ -36,40 +36,43 @@ unsigned int SimulationStruct::GetRzSize(){
 	return det.nr*det.nz;
 }
 
-//__global__ void ReflectTest(MemStruct DeviceMem){
-//	//Block index
-//	int bx = blockIdx.x;
-//
-//	//Thread index
-//	int tx = threadIdx.x;
-//	int new_layer = 0;
-//
-//
-//
-//	//First element processed by the block
-//	int begin = blockDim.x*bx;
-//
-//	PhotonStruct* p = &DeviceMem.p[begin + tx];
-//	p->dead = 0;
-//	p->s = 0;
-//	p->sleft = 0;
-//	
-//	p->x = 0.0f;
-//	p->y = 0.0f;
-//	p->z = 0.001f;
-//	p->dx = 0.2f;
-//	p->dy = 0.3f;
-//	p->dz = -0.9f+tx*0.001;
-//	
-//	p->dx = p->dx / sqrt(p->dx*p->dx + p->dy*p->dy + p->dz*p->dz);
-//	p->dy = p->dy / sqrt(p->dx*p->dx + p->dy*p->dy + p->dz*p->dz);
-//	p->dz = p->dz / sqrt(p->dx*p->dx + p->dy*p->dy + p->dz*p->dz);
-//	
-//	p->layer = 1;
-//	p->weight = *start_weight_dc;
-//	//p->dead=Reflecta(p, 0, DeviceMem.x, DeviceMem.a);
-//
-//}
+__global__ void ReflectTest(MemStruct DeviceMem){
+	//Block index
+	int bx = blockIdx.x;
+
+	//Thread index
+	int tx = threadIdx.x;
+	int new_layer = 0;
+
+
+
+	//First element processed by the block
+	int begin = blockDim.x*bx;
+	unsigned long long int x = DeviceMem.x[begin + tx];	//coherent
+	unsigned int a = DeviceMem.a[begin + tx];
+	DeviceMem.check[begin + tx].cc=rand_MWC_oc(&x, &a);
+	DeviceMem.check[begin + tx].c = RandomNum();
+	//PhotonStruct* p = &DeviceMem.p[begin + tx];
+	//p->dead = 0;
+	//p->s = 0;
+	//p->sleft = 0;
+	//
+	//p->x = 0.0f;
+	//p->y = 0.0f;
+	//p->z = 0.001f;
+	//p->dx = 0.2f;
+	//p->dy = 0.3f;
+	//p->dz = -0.9f+tx*0.001;
+	//
+	//p->dx = p->dx / sqrt(p->dx*p->dx + p->dy*p->dy + p->dz*p->dz);
+	//p->dy = p->dy / sqrt(p->dx*p->dx + p->dy*p->dy + p->dz*p->dz);
+	//p->dz = p->dz / sqrt(p->dx*p->dx + p->dy*p->dy + p->dz*p->dz);
+	//
+	//p->layer = 1;
+	//p->weight = *start_weight_dc;
+	//p->dead=Reflecta(p, 0, DeviceMem.x, DeviceMem.a);
+
+}
 
 //
 // MCML計算の本体
@@ -458,11 +461,11 @@ __global__ void LaunchOutput_Global(MemStruct  mem)
 	
 	return;
 }
-__global__ void SetRandpram(curandState* devState){
+__global__ void SetRandpram(curandState* devState,MemStruct mem){
 	int id = threadIdx.x + blockIdx.x * blockDim.x;
 	/* Each thread gets same seed, a different sequence number,
 	no offset */
-	curand_init(*dc_Seed, id, 0, &devState[id]);
+	curand_init(*dc_Seed+*mem.divnum++, id, 0, &devState[id]);
 }
 
 __global__ void InitRng(MemStruct devMem,curandState* RndMakerglobal){
@@ -689,39 +692,45 @@ __device__ void AtomicAddDBL(double* address, double add)
 
 __device__ float ran3(int *idum)
 {
-	static int inext, inextp;
-	static long ma[56];
-	static int iff = 0;
+	int bx = blockIdx.x;
+
+	//Thread index
+	int tx = threadIdx.x;
+	//First element processed by the block
+	int begin = blockDim.x*bx;
+	static int inext[10240], inextp[10240];
+	static long ma[56][10240];
+	static int iff[10240] = { 0 };
 	long mj, mk;
 	int i, ii, k;
 
 	if (*idum < 0 || iff == 0) {
-		iff = 1;
+		iff[begin+tx] = 1;
 		mj = MSEED - (*idum < 0 ? -*idum : *idum);
 		mj %= MBIG;
-		ma[55] = mj;
+		ma[55][begin + tx] = mj;
 		mk = 1;
 		for (i = 1; i <= 54; i++) {
 			ii = (21 * i) % 55;
-			ma[ii] = mk;
+			ma[ii][begin + tx] = mk;
 			mk = mj - mk;
 			if (mk < MZ) mk += MBIG;
-			mj = ma[ii];
+			mj = ma[ii][begin + tx];
 		}
 		for (k = 1; k <= 4; k++)
 			for (i = 1; i <= 55; i++) {
-				ma[i] -= ma[1 + (i + 30) % 55];
-				if (ma[i] < MZ) ma[i] += MBIG;
+				ma[i][begin + tx] -= ma[1 + (i + 30) % 55][begin + tx];
+				if (ma[i] < MZ) ma[i][begin + tx] += MBIG;
 			}
-		inext = 0;
-		inextp = 31;
+		inext[begin + tx] = 0;
+		inextp[begin + tx] = 31;
 		*idum = 1;
 	}
-	if (++inext == 56) inext = 1;
-	if (++inextp == 56) inextp = 1;
-	mj = ma[inext] - ma[inextp];
+	if (++inext[begin + tx] == 56) inext[begin + tx] = 1;
+	if (++inextp[begin + tx] == 56) inextp[begin + tx] = 1;
+	mj = ma[inext[begin + tx]] - ma[inextp[begin + tx]];
 	if (mj < MZ) mj += MBIG;
-	ma[inext] = mj;
+	ma[inext[begin + tx]][begin + tx] = mj;
 	return mj*FAC;
 }
 
@@ -747,7 +756,7 @@ __device__ double RandomNum(void)
 #if STANDARDTEST /* Use fixed seed to test the program. */
 		idum = -1;
 #else
-		idum = -(int)1 % (1 << 15);
+		idum = -(int) 8% (1 << 15);
 		/* use 16-bit integer as the seed. */
 #endif
 		ran3(&idum);
@@ -760,14 +769,21 @@ __device__ double RandomNum(void)
 
 __device__ float rand_MWC_co(unsigned long long* x, unsigned int* a)
 {
-	return RandomNum();
+	//return RandomNum();
 	float temp = 0.0;
 	
 	//Generate a random number [0,1)
-	//*x = (*x & 0xffffffffull)*(*a) + (*x >> 32);
-	//temp = __fdividef(__uint2float_rz((unsigned int)(*x)), (float)0x100000000);// The typecast will truncate the x so that it is 0<=x<(2^32-1),__uint2float_rz ensures a round towards zero since 32-bit floating point cannot represent all integers that large. Dividing by 2^32 will hence yield [0,1)
-	//
-	//return temp;
+	*x = (*x & 0xffffffffull)*(*a) + (*x >> 32);
+	//while (*x > 0x100000000){
+	//	*x = (*x & 100000000) + (*x >> 32);
+	//	//		if (*x == 0x10000000) return 0;
+	//	//	return *x;
+	//	//
+	//}
+	temp = __fdividef(__uint2float_rz(0x100000000-(unsigned int)(*x)), (float)0x100000000);// The typecast will truncate the x so that it is 0<=x<(2^32-1),__uint2float_rz ensures a round towards zero since 32-bit floating point cannot represent all integers that large. Dividing by 2^32 will hence yield [0,1)
+	
+	
+	return temp;
 }//end __device__ rand_MWC_co
 __device__ float rand_MWC_oc(unsigned long long* x, unsigned int* a)
 {
@@ -820,7 +836,7 @@ int cCUDAMCML::MakeRandTableDev(){
 	cudaMalloc((void **)&devStates, NUM_THREADS * sizeof(curandState));
 	// シード，初期値として用いる乱数配列の作成
 	// MCMLの乱数生成に利用できない　⇒　ライブラリの都合上，スレッド数が制限されるため
-	SetRandpram << < dimNumBlockRand, dimNumThreadRand >> > (devStates);
+	SetRandpram << < dimNumBlockRand, dimNumThreadRand >> > (devStates,m_sDeviceMem);
 	cudastat = cudaGetLastError();	// Check if there was an error
 	if (cudastat){
 		return _ERR_GPU_SIM_RND_;
@@ -917,7 +933,10 @@ int cCUDAMCML::DoOneSimulation(SimulationStruct* simulation)
 		}
 		//std::ofstream ofs("text.csv");
 		//for (int i = 0; i < NUM_THREADS; i++){
-		//	ofs << m_sHostMem.check[i].dz << std::endl;
+		//	ofs << m_sHostMem.check[i].c << ",";
+		//	ofs << m_sHostMem.x[i] << ",";
+		//	ofs << m_sHostMem.a[i] << ",";
+		//	ofs << m_sHostMem.check[i].cc << std::endl;
 		//	//ofs << m_sHostMem.p[i].dead << ",";
 		//	//ofs << m_sHostMem.p[i].sleft << ",";
 		//	//ofs << m_sHostMem.p[i].rr << std::endl;
@@ -927,11 +946,7 @@ int cCUDAMCML::DoOneSimulation(SimulationStruct* simulation)
 			if (m_sHostMem.thread_active[i] != 65535){
 				TotalP += m_sHostMem.thread_active[i];
 			}
-			if (m_sHostMem.check[i].c != 0 ){
-
-				x++;
-
-			}
+		
 		}
 	}
 
@@ -1000,6 +1015,10 @@ int cCUDAMCML::InitMallocMem(SimulationStruct* sim){
 	}
 
 	tmp = cudaMalloc((void**)&m_sDeviceMem.Out_Ptr, sizeof(OutStruct));
+	if (tmp != cudaSuccess) {
+		State |= 0x10;
+	}
+	tmp = cudaMalloc((void**)&m_sDeviceMem.divnum, sizeof(unsigned long long));
 	if (tmp != cudaSuccess) {
 		State |= 0x10;
 	}
@@ -1153,7 +1172,11 @@ int cCUDAMCML::InitMallocMem(SimulationStruct* sim){
 	if (m_sHostMem.check == NULL){
 		State |= 0x0100000000;
 	}
-
+	m_sHostMem.divnum = new unsigned long long;
+	if (m_sHostMem.check == NULL){
+		State |= 0x0200000000;
+	}
+	(*m_sHostMem.divnum) = 0;
 	return State ;
 }
 void cCUDAMCML::CopyDeviceToHostMem(MemStruct* HostMem, MemStruct* DeviceMem, SimulationStruct* sim)
@@ -1169,7 +1192,7 @@ void cCUDAMCML::CopyDeviceToHostMem(MemStruct* HostMem, MemStruct* DeviceMem, Si
 	tmp=cudaMemcpy(HostMem->check, DeviceMem->check, NUM_THREADS*sizeof(CheckStruct), cudaMemcpyDeviceToHost);
 	tmp=cudaMemcpy(HostMem->Out_Ptr->Rd_ra,m_sOutStruct.Rd_ra, ra_size*sizeof(double), cudaMemcpyDeviceToHost);
 	tmp=cudaMemcpy(HostMem->Out_Ptr->Rd_p, m_sOutStruct.Rd_p, ra_size*sizeof(double), cudaMemcpyDeviceToHost);
-	
+	tmp = cudaMemcpy(HostMem->divnum, DeviceMem->divnum, sizeof(unsigned long long), cudaMemcpyDeviceToHost);
 	//Also copy the state of the RNG's
 	cudaMemcpy(HostMem->p, DeviceMem->p, NUM_THREADS *sizeof(PhotonStruct), cudaMemcpyDeviceToHost);
 	tmp = cudaMemcpy(HostMem->Out_Ptr->opl, m_sOutStruct.opl, sizeof(double), cudaMemcpyDeviceToHost);

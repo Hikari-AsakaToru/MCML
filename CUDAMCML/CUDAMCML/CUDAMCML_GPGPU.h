@@ -276,6 +276,7 @@ __host__ __device__ struct MemStruct{
 	unsigned long long* Rd_ra;
 	unsigned long long* A_rz;			// Pointer to the 2D detection matrix!
 	unsigned long long* Tt_ra;
+	unsigned long long* divnum;
 };
 
 
@@ -283,7 +284,8 @@ __host__ __device__ struct MemStruct{
 
 #ifdef _NVCC_
 template <int ignoreAdetection> __global__ void CalcMCGPU(MemStruct);
-__device__ float ReflectTest(MemStruct);
+__global__ void ReflectTest(MemStruct);
+__device__ double RandomNum(void);
 __device__ float rand_MWC_oc(unsigned long long*, unsigned int*);
 __device__ float rand_MWC_co(unsigned long long*, unsigned int*);
 __device__ void LaunchPhoton(PhotonStruct*);

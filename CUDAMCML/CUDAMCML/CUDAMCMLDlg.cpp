@@ -175,7 +175,7 @@ int cMCML::WriteSimRslts(MemStruct* HostMem, SimulationStruct* sim)
 	TransCstr.Format(_T("%d"), sim->RecordDoSim.procAvergTime);
 	cOutputFile.WriteString(TransCstr + _T(" ,\t\t\t# Process Average Time[ms] (DoOneSim())	\n"));
 	// Num of Photon
-	TransCstr.Format(_T("%d"), sim->number_of_photons);
+	TransCstr.Format(_T("%d"), sim->number_of_photons*sim->nDivedSimNum);
 	cOutputFile.WriteString(TransCstr + _T(" ,\t\t\t# No. of photons\n"));
 	// dr [cm]
 	TransCstr.Format(_T("%f"), sim->det.dr);
@@ -509,7 +509,7 @@ CString cMCML::ReadSimData(CString* filename, SimulationStruct** simulations, in
 				+ sizeof(unsigned long long)*((*simulations)[nLoop].det.nr*((*simulations)[nLoop].det.nz + 2 * (*simulations)[nLoop].det.na));
 		}
 //		(*simulations)[nLoop].nDivedSimNum *= Tmp / (*simulations)[nLoop].number_of_photons;
-		(*simulations)[nLoop].nDivedSimNum++;
+		//(*simulations)[nLoop].nDivedSimNum++;
 		//Å@èâä˙éøó ÇÃåvéZ
 		double n1 = (*simulations)[nLoop].layers[0].n;
 		double n2 = (*simulations)[nLoop].layers[1].n;

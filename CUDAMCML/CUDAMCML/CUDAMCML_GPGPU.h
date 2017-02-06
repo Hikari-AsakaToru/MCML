@@ -323,7 +323,7 @@ protected:
 	unsigned int	m_unNumGridA;
 	unsigned int	m_unNumLayer;
 
-
+	
 public:
 
 	cCUDAMCML();

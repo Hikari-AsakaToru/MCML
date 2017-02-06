@@ -2,13 +2,12 @@
 #include "cuda_runtime_api.h"
 #include "MFC_IO.h"
 #include "CUDAMCML_GPGPU.h"
-
-
-
+#include "MCMLGL.h"
 
 
 // C++Ç≈èëÇ©Ç»Ç´Ç·ñ≥óùÇ»ïîï™(Input/Output)ÇÕåpè≥êÊÇ≈èëÇ≠
-class cMCML :public cCUDAMCML{
+class cMCML : public cCUDAMCML{
+	MCMLGrap Graphics;
 	CString m_cstrOutputName;
 	CString m_tmpStrData;
 	unsigned int m_nNumStr;
@@ -329,4 +328,15 @@ class cMCML :public cCUDAMCML{
 public:
 	void InitIO();
 	CString StartSim(CString* chPathName, int nPathName, CString* cstrB32Name, int B32NameLeng,unsigned int Seed);
+	inline void InitDispData(){
+		Graphics.SetData(&m_sHostMem);
+	}
+	inline void DispMCML(){
+		glClearColor(0.3f, 0.3f, 0.3f, 1.0f);
+		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+		Graphics.DispXYZMainRay();
+		Graphics.DispXYZSubRayALL();
+		Graphics.DispRecv();
+		Graphics.DispPhoton();
+	}
 };

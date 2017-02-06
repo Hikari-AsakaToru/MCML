@@ -579,7 +579,7 @@ __device__ unsigned int Reflect(PhotonStruct* p, int new_layer, unsigned long lo
 		*returnvalue = 1;
 		p->rc = 2;
 		p->dz *= -1.0f; 
-		
+		p->rr = 1;
 		return 1u;
 	}
 	//normal incident
@@ -639,7 +639,7 @@ __device__ unsigned int Reflect(PhotonStruct* p, int new_layer, unsigned long lo
 		p->rc = 5;
 		// Reflection, mirror z-direction!
 		p->dz *= -1.0f;
-		
+		p->rr = 1;
 		return 1u;
 	}
 	else
@@ -780,7 +780,8 @@ __device__ float rand_MWC_co(unsigned long long* x, unsigned int* a)
 	//	//	return *x;
 	//	//
 	//}
-	temp = __fdividef(__uint2float_rz(0x100000000-(unsigned int)(*x)), (float)0x100000000);// The typecast will truncate the x so that it is 0<=x<(2^32-1),__uint2float_rz ensures a round towards zero since 32-bit floating point cannot represent all integers that large. Dividing by 2^32 will hence yield [0,1)
+	
+	temp = __fdividef(__uint2float_rz((unsigned int)(*x)), (float)0x100000000);// The typecast will truncate the x so that it is 0<=x<(2^32-1),__uint2float_rz ensures a round towards zero since 32-bit floating point cannot represent all integers that large. Dividing by 2^32 will hence yield [0,1)
 	
 	
 	return temp;
@@ -895,7 +896,7 @@ int cCUDAMCML::DoOneSimulation(SimulationStruct* simulation)
 	dim3 dimNumBlock(NUM_GRID_PER_BLOCK);
 	dim3 dimNumThread(NUM_THREADS_PER_BLOCK);
 	int TotalP = 0;
-	//ReflectTest<<<dimNumBlock,dimNumThread>>>(m_sDeviceMem);
+	ReflectTest<<<dimNumBlock,dimNumThread>>>(m_sDeviceMem);
 	
 	while (TotalP<simulation->number_of_photons)
 	{
@@ -925,22 +926,11 @@ int cCUDAMCML::DoOneSimulation(SimulationStruct* simulation)
 		cudastat = cudaMemcpy(m_sHostMem.thread_active, m_sDeviceMem.thread_active, NUM_THREADS * sizeof(unsigned int), cudaMemcpyDeviceToHost);
 		cudastat = cudaMemcpy(m_sHostMem.num_terminated_photons, m_sDeviceMem.num_terminated_photons,sizeof(unsigned int), cudaMemcpyDeviceToHost);
 		cudastat = cudaMemcpy(m_sHostMem.check, m_sDeviceMem.check, NUM_THREADS * sizeof(CheckStruct), cudaMemcpyDeviceToHost);
-		//	cudaThreadSynchronize();		// Wait for all threads to finish
-		// 
-		cudastat = cudaGetLastError(); // Check if there was an error
+		cudastat = cudaGetLastError();
 		if (cudastat){
 			return _ERR_GPU_SIM_MEMCPY_;
 		}
-		//std::ofstream ofs("text.csv");
-		//for (int i = 0; i < NUM_THREADS; i++){
-		//	ofs << m_sHostMem.check[i].c << ",";
-		//	ofs << m_sHostMem.x[i] << ",";
-		//	ofs << m_sHostMem.a[i] << ",";
-		//	ofs << m_sHostMem.check[i].cc << std::endl;
-		//	//ofs << m_sHostMem.p[i].dead << ",";
-		//	//ofs << m_sHostMem.p[i].sleft << ",";
-		//	//ofs << m_sHostMem.p[i].rr << std::endl;
-		//}
+
 		int x = 0;
 		for (int i = 0; i < NUM_THREADS; i++){
 			if (m_sHostMem.thread_active[i] != 65535){
@@ -1176,7 +1166,6 @@ int cCUDAMCML::InitMallocMem(SimulationStruct* sim){
 	if (m_sHostMem.check == NULL){
 		State |= 0x0200000000;
 	}
-	(*m_sHostMem.divnum) = 0;
 	return State ;
 }
 void cCUDAMCML::CopyDeviceToHostMem(MemStruct* HostMem, MemStruct* DeviceMem, SimulationStruct* sim)
@@ -1381,6 +1370,10 @@ int cCUDAMCML::InitContentsMem(SimulationStruct* sim)
 	if (tmp != cudaSuccess) {
 		State |= 0x20;
 	}
+	tmp = cudaMemset(DeviceMem->divnum, 0, sizeof(unsigned long long));
+	if (tmp != cudaSuccess) {
+		State |= 0x20;
+	}
 
 	PhotonStruct TmpPS;
 
@@ -1466,6 +1459,7 @@ void cCUDAMCML::FreeMemStructs(MemStruct* HostMem, MemStruct* DeviceMem)
 	cudaFree(DeviceMem->A_rz);
 	cudaFree(DeviceMem->Rd_ra);
 	cudaFree(DeviceMem->Tt_ra);
+	cudaFree(DeviceMem->divnum);
 	cudaFree(m_sOutStruct.Rd_p);
 	cudaFree(m_sOutStruct.Rd_ra);
 	cudaFree(m_sOutStruct.L);
@@ -1489,6 +1483,7 @@ void cCUDAMCML::FreeMemStructs(MemStruct* HostMem, MemStruct* DeviceMem)
 	delete[] HostMem->Out_Ptr->OPL;
 	delete[] HostMem->Out_Ptr->opl;
 	delete[] HostMem->check;
+	delete[] HostMem->divnum;
 }
 
 void cCUDAMCML::FreeSimulationStruct(SimulationStruct* sim, int nRun)

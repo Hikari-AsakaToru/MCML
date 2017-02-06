@@ -4,7 +4,8 @@
 
 #pragma once
 #include "CUDAMCML_IO.h"
-
+#include "afxwin.h"
+#include "MCMLGL.h"
 #define _No_ERROR_			0x0000000000000000
 #define _Wrong_				0x0000000080000000
 #define _Err_NO_NUMERIC_	0x8000000100000000
@@ -65,6 +66,15 @@ public:
 	CString m_xvSeedText;
 	int m_xvRadioFocus;
 	afx_msg void OnkillSeed();
+private:
+	CStatic m_Pic;
+	CDC* m_pDC;
+	HGLRC m_GLRC;
+	bool SetupPixelFormat(HDC hdc);
+	MCMLGrap Graphics;
+public:
+	afx_msg void OnDestroy();
+	afx_msg void OnSize(UINT nType, int cx, int cy);
 };
 
 

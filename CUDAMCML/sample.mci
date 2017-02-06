@@ -1,0 +1,26 @@
+1.0                      	# file version
+1                        	# number of runs
+# RUN No.1
+sample.mco 		      	# output file name, ASCII.
+1000000000                  	# No. of photons
+0.01				# dz [cm]
+0.01		               	# dr [cm]
+2000				# No. of dz
+5000				# No. of dr
+1				# No. of da
+1                        	# Number of layers
+2                         	# n for medium above
+# Lay 1
+1.33				# n
+0.06				# mua
+100				# mus
+0.9				# g
+0.9				# d
+# Lay 2
+1.33				# n
+0.10				# mua
+100				# mus
+0.9				# g
+100				# d
+# Ref Lay
+1 				

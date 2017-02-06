@@ -1,0 +1,1 @@
+void MakeDevMem(int Size,int* h_lp);

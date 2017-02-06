@@ -9,7 +9,6 @@
 #include "CUDAMCMLDlg.h"
 #include "afxdialogex.h"
 #include <string>
-
 #ifdef _DEBUG
 #define new DEBUG_NEW
 #endif
@@ -20,9 +19,11 @@
 
 CCUDAMCMLDlg::CCUDAMCMLDlg(CWnd* pParent /*=NULL*/)
 	: CDialogEx(CCUDAMCMLDlg::IDD, pParent)
-	, m_xvPath(_T("C:\\Users\\MacOS\\Documents\\Visual Studio 2013\\Projects\\InputData\\sample.mci"))
+//	, m_xvPath(_T("C:\\Users\\MacOS\\Documents\\Visual Studio 2013\\Projects\\InputData\\sample.mci"))
+	, m_xvPath(_T("C:\\Users\\AdachiLabo01\\Desktop\\CUDAMCML\\sample.mci"))
 	, m_xvStatus(_T(""))
-	, m_xvRefBase32(_T("C:\\Users\\MacOS\\Documents\\Visual Studio 2013\\Projects\\InputData\\safeprimes_base32.txt"))
+//	, m_xvRefBase32(_T("C:\\Users\\MacOS\\Documents\\Visual Studio 2013\\Projects\\InputData\\safeprimes_base32.txt"))
+	, m_xvRefBase32(_T("C:\\Users\\AdachiLabo01\\Desktop\\CUDAMCML\\safeprimes_base32.txt"))
 	, m_xvSeed(100)
 	, m_xvSeedText(_T("100"))
 	, m_xvRadioFocus(0)
@@ -41,6 +42,7 @@ void CCUDAMCMLDlg::DoDataExchange(CDataExchange* pDX)
 	DDV_MaxChars(pDX, m_xvRefBase32, 200);
 	DDX_Text(pDX, IDC_SEED, m_xvSeedText);
 	DDX_Radio(pDX, IDC_RADIO1, m_xvRadioFocus);
+	DDX_Control(pDX, IDC_MCMLPIC, m_Pic);
 }
 
 BEGIN_MESSAGE_MAP(CCUDAMCMLDlg, CDialogEx)
@@ -56,6 +58,8 @@ BEGIN_MESSAGE_MAP(CCUDAMCMLDlg, CDialogEx)
 	ON_EN_CHANGE(IDC_PROCESS_STATE2, &CCUDAMCMLDlg::OnEnChangeProcessState2)
 
 	ON_EN_KILLFOCUS(IDC_SEED, &CCUDAMCMLDlg::OnkillSeed)
+	ON_WM_DESTROY()
+	ON_WM_SIZE()
 END_MESSAGE_MAP()
 
 
@@ -72,6 +76,27 @@ BOOL CCUDAMCMLDlg::OnInitDialog()
 
 	// TODO: 初期化をここに追加します。
 	m_uin64ErrorFlag = _No_ERROR_;
+	m_pDC = new CClientDC(&m_Pic);
+	if (SetupPixelFormat(m_pDC->m_hDC) != FALSE) {
+		m_GLRC = wglCreateContext(m_pDC->m_hDC);
+		wglMakeCurrent(m_pDC->m_hDC, m_GLRC);
+		CRect rc;
+		m_Pic.GetClientRect(&rc);
+		GLint width = rc.Width();
+		GLint height = rc.Height();
+		GLdouble aspect = (GLdouble)width / (GLdouble)height;
+		glViewport(0, 0, width, height);
+		glMatrixMode(GL_PROJECTION);
+		glLoadIdentity();
+		glOrtho(-aspect, aspect, -1.0, 1.0, -10.0, 10.0);
+		glMatrixMode(GL_MODELVIEW);
+		glLoadIdentity();
+		gluLookAt(0.3, 0.5, 1.0, //カメラの座標
+			0.0, 0.0, 0.0, // 注視点の座標
+			0.0, 1.0, 0.0); // 画面の上方向を指すベクトル	
+		glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);//アルファの設定
+		glEnable(GL_BLEND);//アルファのブレンド有効
+	}
 	return TRUE;  // フォーカスをコントロールに設定した場合を除き、TRUE を返します。
 }
 
@@ -81,6 +106,7 @@ BOOL CCUDAMCMLDlg::OnInitDialog()
 
 void CCUDAMCMLDlg::OnPaint()
 {
+
 	if (IsIconic())
 	{
 		CPaintDC dc(this); // 描画のデバイス コンテキスト
@@ -101,6 +127,9 @@ void CCUDAMCMLDlg::OnPaint()
 	else
 	{
 		CDialogEx::OnPaint();
+		// ここでシーンを描く
+		m_cCUDAMCML.DispMCML();
+		SwapBuffers(m_pDC->m_hDC);
 	}
 }
 
@@ -616,6 +645,7 @@ CString cMCML::StartSim(CString* chPathName, int nPathName, CString* cstrB32Name
 			Tmp2.Format(_T("%x"), MemState);
 			return _T("SimMem Malloc Error:") + Tmp2;
 		}
+		InitDispData();
 
 		// Sim[Run] の定数のコピー
 		MemState = InitDCMem(&m_simulations[nRun]);
@@ -784,4 +814,62 @@ void CCUDAMCMLDlg::OnkillSeed()
 	}
 	m_xvSeed = _tcstoul(m_xvSeedText, NULL, 10);
 
+}
+
+
+bool CCUDAMCMLDlg::SetupPixelFormat(HDC hdc)
+{
+	PIXELFORMATDESCRIPTOR pfd = {
+		sizeof(PIXELFORMATDESCRIPTOR), // PFD のサイズ
+		1, // バージョン
+		PFD_DRAW_TO_WINDOW | // ウィンドウに描画する
+		PFD_SUPPORT_OPENGL | // OpenGL を使う
+		PFD_DOUBLEBUFFER, // ダブルバッファリングする
+		PFD_TYPE_RGBA, // RGBA モード
+		24, // カラーバッファは 24 ビット
+		0, 0, 0, 0, 0, 0, // (各チャンネルのビット数は指定しない)
+		0, 0, // アルファバッファは使わない
+		0, 0, 0, 0, 0, // アキュムレーションバッファは使わない
+		32, // デプスバッファは 32 ビット
+		0, // ステンシルバッファは使わない
+		0, // 補助バッファは使わない
+		PFD_MAIN_PLANE, // メインレイヤー
+		0, // (予約)
+		0, 0, 0 // レイヤーマスクは無視する
+	};
+	int pf = ChoosePixelFormat(hdc, &pfd);
+	if (pf != 0) return SetPixelFormat(hdc, pf, &pfd);
+	return false;
+}
+
+
+void CCUDAMCMLDlg::OnDestroy()
+{
+	CDialogEx::OnDestroy();
+
+	// TODO: ここにメッセージ ハンドラー コードを追加します。
+	wglMakeCurrent(NULL, NULL);
+	wglDeleteContext(m_GLRC);
+	delete m_pDC;
+}
+
+
+void CCUDAMCMLDlg::OnSize(UINT nType, int cx, int cy)
+{
+	CDialogEx::OnSize(nType, cx, cy);
+
+	// TODO: ここにメッセージ ハンドラー コードを追加します。
+	if (wglGetCurrentContext() != NULL) {
+		CRect rc;
+		m_Pic.GetClientRect(&rc);
+		GLint width = rc.Width();
+		GLint height = rc.Height();
+		GLdouble aspect = (GLdouble)width / (GLdouble)height;
+		// OpenGL の初期設定
+		glViewport(0, 0, width, height);
+		glMatrixMode(GL_PROJECTION);
+		glLoadIdentity();
+		glOrtho(-aspect, aspect, -1.0, 1.0, -10.0, 10.0);
+		glMatrixMode(GL_MODELVIEW);
+	}
 }
